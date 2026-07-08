@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clinical Co-Pilot — System Architecture</title>
+<style>
+  :root {
+    --bg: #f6f8fb; --card: #ffffff; --ink: #0f172a; --muted: #475569;
+    --line: #e2e8f0; --arrow: #64748b; --badge: #0f172a; --badge-ink: #ffffff;
+    --danger: #dc2626;
+    --oe: #2563eb;   /* existing OpenEMR infrastructure */
+    --new: #16a34a;  /* new code built this project */
+    --ext: #d97706;  /* external, BAA-covered */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1220; --card: #121b30; --ink: #e2e8f0; --muted: #94a3b8;
+      --line: #24324d; --arrow: #8fa3bd; --badge: #e2e8f0; --badge-ink: #0b1220;
+      --danger: #f87171;
+      --oe: #60a5fa; --new: #4ade80; --ext: #fbbf24;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: 28px clamp(16px, 4vw, 48px) 48px;
+  }
+  header { max-width: 1520px; margin: 0 auto 6px; }
+  h1 { font-size: 22px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13.5px; margin-top: 2px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 18px; }
+  .chip {
+    font-size: 12px; font-weight: 600; padding: 4px 11px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  }
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; align-items: center;
+    font-size: 12.5px; color: var(--muted); margin: 0 auto 10px; max-width: 1520px; }
+  .sw { display: inline-block; width: 13px; height: 13px; border-radius: 4px;
+    vertical-align: -2px; margin-right: 6px; border: 1.5px solid; }
+  .sw-oe  { border-color: var(--oe);  background: color-mix(in srgb, var(--oe)  12%, transparent); }
+  .sw-new { border-color: var(--new); background: color-mix(in srgb, var(--new) 12%, transparent); }
+  .sw-ext { border-color: var(--ext); background: color-mix(in srgb, var(--ext) 12%, transparent); }
+  .sw-tb  { border: none; border-top: 2.5px dashed var(--danger); height: 0; width: 22px; border-radius: 0; vertical-align: 3px; }
+  .badge-demo { display: inline-flex; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--badge); color: var(--badge-ink); font-size: 11px; font-weight: 700;
+    align-items: center; justify-content: center; margin-right: 6px; vertical-align: -4px; }
+
+  .diagram-wrap {
+    max-width: 1520px; margin: 0 auto; background: var(--card);
+    border: 1px solid var(--line); border-radius: 14px; padding: 10px 6px 2px;
+    overflow-x: auto;
+  }
+  .diagram-wrap svg { display: block; min-width: 1050px; width: 100%; height: auto; }
+
+  /* ---- SVG classes ---- */
+  .cont { fill-opacity: 0.05; stroke-width: 1.5; rx: 12; }
+  .cont-oe  { fill: var(--oe);  stroke: var(--oe); }
+  .cont-new { fill: var(--new); stroke: var(--new); }
+  .box { stroke-width: 1.6; fill-opacity: 0.10; }
+  .box-oe  { fill: var(--oe);  stroke: var(--oe); }
+  .box-new { fill: var(--new); stroke: var(--new); }
+  .box-ext { fill: var(--ext); stroke: var(--ext); }
+  .box-plain { fill: var(--card); stroke: var(--line); }
+  .t  { fill: var(--ink); font-size: 12.5px; font-weight: 700; }
+  .tc { fill: var(--muted); font-size: 11.5px; font-weight: 700; letter-spacing: .04em; }
+  .b  { fill: var(--muted); font-size: 10.5px; }
+  .arrow { stroke: var(--arrow); stroke-width: 2; fill: none; }
+  .albl { fill: var(--muted); font-size: 10px; font-weight: 600; }
+  .tb { stroke: var(--danger); stroke-width: 1.8; stroke-dasharray: 6 5; fill: none; }
+  .tblbl { fill: var(--danger); font-size: 10.5px; font-weight: 700; }
+  .badge { fill: var(--badge); }
+  .badge-t { fill: var(--badge-ink); font-size: 11px; font-weight: 700; text-anchor: middle; }
+  .callout { fill: none; stroke: var(--danger); stroke-width: 1.3; stroke-dasharray: 4 4; }
+  .callout-t { fill: var(--ink); font-size: 10.5px; font-weight: 600; }
+
+  .grid { max-width: 1520px; margin: 22px auto 0; display: grid; gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+  .card h2 { font-size: 14px; margin-bottom: 10px; letter-spacing: .01em; }
+  .card ol, .card ul { padding-left: 20px; font-size: 13px; color: var(--muted); }
+  .card li { margin-bottom: 7px; }
+  .card li strong, .card li b { color: var(--ink); }
+  .card .why { display: block; font-size: 12px; margin-top: 1px; }
+  footer { max-width: 1520px; margin: 20px auto 0; color: var(--muted); font-size: 12px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Clinical Co-Pilot — System Architecture</h1>
+  <div class="sub">Chart-embedded AI agent for pre-visit review · companion to <code>ARCHITECTURE.md</code> and <code>USER.md</code> · AgentForge Week 1</div>
+  <div class="chips">
+    <span class="chip">🔒 Read-only agent — zero EMR write access</span>
+    <span class="chip">🛂 Authorization inherited from the EMR, never re-implemented</span>
+    <span class="chip">✅ Deterministic verification — fail closed</span>
+    <span class="chip">🔍 Physician always knows what was NOT checked</span>
+  </div>
+</header>
+
+<div class="legend">
+  <span><span class="sw sw-oe"></span>Existing OpenEMR infrastructure (reused)</span>
+  <span><span class="sw sw-new"></span>New code (this project)</span>
+  <span><span class="sw sw-ext"></span>External service — BAA-covered</span>
+  <span><span class="sw sw-tb"></span>&nbsp;Trust boundary</span>
+  <span><span class="badge-demo">n</span>Request lifecycle step</span>
+</div>
+
+<div class="diagram-wrap">
+<svg viewBox="0 0 1520 850" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="Clinical Co-Pilot architecture: physician uses a chart panel inside OpenEMR; a separate Python agent service reads patient data through OpenEMR's FHIR API with the user's token, calls a BAA-covered LLM, verifies every claim, and logs to OpenEMR's audit system and LangSmith.">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="var(--arrow)"/>
+    </marker>
+  </defs>
+
+  <!-- ===== Trust boundaries ===== -->
+  <line class="tb" x1="210"  y1="100" x2="210"  y2="820"/>
+  <line class="tb" x1="785"  y1="100" x2="785"  y2="820"/>
+  <line class="tb" x1="1275" y1="100" x2="1275" y2="820"/>
+  <text class="tblbl" x="210"  y="95" text-anchor="middle">① session auth</text>
+  <text class="tblbl" x="785"  y="95" text-anchor="middle">② OAuth per request — no standing credentials</text>
+  <text class="tblbl" x="1275" y="95" text-anchor="middle">③ BAA — PHI minimized</text>
+
+  <!-- ===== Top request/response lane: panel <-> /chat ===== -->
+  <polyline class="arrow" points="362,180 362,70 1035,70 1035,180"
+            marker-start="url(#arr)" marker-end="url(#arr)"/>
+  <circle class="badge" cx="430" cy="70" r="11"/><text class="badge-t" x="430" y="74">3</text>
+  <text class="albl" x="448" y="60">request → question + SMART token + fresh correlation ID</text>
+  <circle class="badge" cx="1000" cy="70" r="11"/><text class="badge-t" x="1000" y="74">8</text>
+  <text class="albl" x="982" y="60" text-anchor="end">← response: verified + cited, streamed</text>
+
+  <!-- ===== Physician ===== -->
+  <rect class="box box-plain" x="25" y="170" width="160" height="120" rx="10"/>
+  <text class="t" x="41" y="196">Dr. Chen</text>
+  <text class="b" x="41" y="216">primary care physician<tspan x="41" dy="16">pre-visit chart review</tspan><tspan x="41" dy="16">90-second window</tspan></text>
+
+  <!-- invariant callout -->
+  <rect class="callout" x="25" y="330" width="160" height="118" rx="10"/>
+  <text class="callout-t" x="41" y="356">Governing invariant:<tspan x="41" dy="17">the physician always</tspan><tspan x="41" dy="17">knows what the agent</tspan><tspan x="41" dy="17">did NOT check —</tspan><tspan x="41" dy="17">no silent omissions.</tspan></text>
+
+  <!-- ===== OpenEMR container ===== -->
+  <rect class="cont cont-oe" x="235" y="120" width="515" height="650" rx="12"/>
+  <text class="tc" x="260" y="150">OPENEMR — EXISTING INFRASTRUCTURE (+ 1 NEW MODULE)</text>
+
+  <rect class="box box-new" x="260" y="180" width="205" height="120" rx="10"/>
+  <text class="t" x="276" y="206">Clinical Co-Pilot panel</text>
+  <text class="b" x="276" y="226">custom module · Summary-Card<tspan x="276" dy="16">render event (no core edits)</tspan><tspan x="276" dy="16">chat · streaming · citation links</tspan></text>
+
+  <rect class="box box-oe" x="505" y="180" width="220" height="120" rx="10"/>
+  <text class="t" x="521" y="206">OAuth2 / SMART on FHIR</text>
+  <text class="b" x="521" y="226">AuthorizationController.php<tspan x="521" dy="16">token = user + open patient</tspan><tspan x="521" dy="16">short-lived · per conversation</tspan></text>
+
+  <rect class="box box-oe" x="505" y="350" width="220" height="130" rx="10"/>
+  <text class="t" x="521" y="376">FHIR R4 API</text>
+  <text class="b" x="521" y="396">RestControllers/FHIR<tspan x="521" dy="16">Patient · Meds · Problems</tspan><tspan x="521" dy="16">Allergies · Labs · Encounters</tspan><tspan x="521" dy="16">Documents · Immunizations</tspan></text>
+
+  <rect class="box box-oe" x="505" y="520" width="220" height="95" rx="10"/>
+  <text class="t" x="521" y="546">ACL + scope enforcement</text>
+  <text class="b" x="521" y="566">AclMain (phpGACL) · scopes<tspan x="521" dy="16">runs on every read</tspan></text>
+
+  <rect class="box box-new" x="260" y="360" width="205" height="95" rx="10"/>
+  <text class="t" x="276" y="386">Co-Pilot audit bridge</text>
+  <text class="b" x="276" y="406">module endpoint (new PHP)<tspan x="276" dy="16">receives invocation record</tspan><tspan x="276" dy="16">calls logger in-process ↓</tspan></text>
+
+  <rect class="box box-oe" x="260" y="515" width="205" height="112" rx="10"/>
+  <text class="t" x="276" y="541">EventAuditLogger</text>
+  <text class="b" x="276" y="561">audit tables · access + decision log<tspan x="276" dy="16">event: ai-clinical-summary</tspan><tspan x="276" dy="16">§164.528 disclosure on egress</tspan><tspan x="276" dy="16">written via module bridge ↓9a</tspan></text>
+
+  <rect class="box box-oe" x="505" y="655" width="220" height="85" rx="10"/>
+  <text class="t" x="521" y="681">MySQL</text>
+  <text class="b" x="521" y="701">patient data — the agent<tspan x="521" dy="16">never connects directly</tspan></text>
+
+  <!-- ===== Agent service container ===== -->
+  <rect class="cont cont-new" x="820" y="120" width="430" height="650" rx="12"/>
+  <text class="tc" x="845" y="150">AGENT SERVICE — NEW · PYTHON / FASTAPI · STATELESS</text>
+
+  <rect class="box box-new" x="845" y="180" width="380" height="95" rx="10"/>
+  <text class="t" x="861" y="206">/chat endpoint</text>
+  <text class="b" x="861" y="226">correlation-ID middleware<tspan x="861" dy="16">/health · /ready (real dependency checks)</tspan></text>
+
+  <rect class="box box-new" x="845" y="315" width="380" height="140" rx="10"/>
+  <text class="t" x="861" y="341">Agent loop + tool registry</text>
+  <text class="b" x="861" y="361">read-only tools · Pydantic contracts:<tspan x="861" dy="16">get_patient_snapshot (parallel fan-out)</tspan><tspan x="861" dy="16">search_observations · get_medication_history</tspan><tspan x="861" dy="16">get_encounters_since · search_documents</tspan><tspan x="861" dy="16">get_immunizations</tspan></text>
+
+  <rect class="box box-new" x="845" y="495" width="380" height="150" rx="10"/>
+  <text class="t" x="861" y="521">Verification layer — hot path · fail closed</text>
+  <text class="b" x="861" y="541">1. citation check: every claim cites a resource ID<tspan x="861" dy="16">&#160;&#160;&#160;&#160;returned by this request (deterministic)</tspan><tspan x="861" dy="16">2. numeric check vs cited resource fields</tspan><tspan x="861" dy="16">3. CDR + drug-interaction flags (attributed to EMR)</tspan><tspan x="861" dy="16">grounding ≠ entailment → offline eval judge</tspan></text>
+
+  <rect class="box box-new" x="1000" y="680" width="225" height="65" rx="10"/>
+  <text class="t" x="1016" y="704">Conversation state</text>
+  <text class="b" x="1016" y="722">user+patient+session · Redis-ready</text>
+
+  <!-- ===== External services ===== -->
+  <rect class="box box-ext" x="1300" y="315" width="195" height="120" rx="10"/>
+  <text class="t" x="1316" y="341">LLM — Claude</text>
+  <text class="b" x="1316" y="361">BAA · tiered models<tspan x="1316" dy="16">fast: routing</tspan><tspan x="1316" dy="16">strong: synthesis</tspan></text>
+
+  <rect class="box box-ext" x="1300" y="495" width="195" height="130" rx="10"/>
+  <text class="t" x="1316" y="521">LangSmith</text>
+  <text class="b" x="1316" y="541">traces · tokens · cost<tspan x="1316" dy="16">evals · dashboards · alerts</tspan><tspan x="1316" dy="16">BAA-covered · PHI masked</tspan></text>
+
+  <!-- ===== Arrows + badges ===== -->
+  <!-- 1: physician -> panel -->
+  <line class="arrow" x1="185" y1="235" x2="256" y2="235" marker-end="url(#arr)"/>
+  <circle class="badge" cx="222" cy="219" r="11"/><text class="badge-t" x="222" y="223">1</text>
+
+  <!-- 2: panel -> OAuth -->
+  <line class="arrow" x1="465" y1="248" x2="501" y2="248" marker-end="url(#arr)"/>
+  <circle class="badge" cx="484" cy="232" r="11"/><text class="badge-t" x="484" y="236">2</text>
+
+  <!-- 4: agent loop -> FHIR (crosses TB2) -->
+  <line class="arrow" x1="845" y1="390" x2="729" y2="390" marker-end="url(#arr)"/>
+  <circle class="badge" cx="800" cy="373" r="11"/><text class="badge-t" x="800" y="377">4</text>
+  <text class="albl" x="787" y="412" text-anchor="middle">FHIR reads · user&#8217;s token · read-only</text>
+
+  <!-- 5: FHIR -> ACL -> MySQL -->
+  <line class="arrow" x1="615" y1="480" x2="615" y2="516" marker-end="url(#arr)"/>
+  <circle class="badge" cx="597" cy="498" r="11"/><text class="badge-t" x="597" y="502">5</text>
+  <line class="arrow" x1="615" y1="615" x2="615" y2="651" marker-end="url(#arr)"/>
+
+  <!-- 6: agent loop -> LLM (crosses TB3) -->
+  <line class="arrow" x1="1225" y1="375" x2="1296" y2="375" marker-end="url(#arr)"/>
+  <circle class="badge" cx="1262" cy="359" r="11"/><text class="badge-t" x="1262" y="363">6</text>
+  <text class="albl" x="1262" y="393" text-anchor="middle">BAA-gated</text>
+  <text class="albl" x="1262" y="405" text-anchor="middle">min-nec. PHI</text>
+
+  <!-- 7: agent loop -> verification -->
+  <line class="arrow" x1="1035" y1="455" x2="1035" y2="491" marker-end="url(#arr)"/>
+  <circle class="badge" cx="1017" cy="473" r="11"/><text class="badge-t" x="1017" y="477">7</text>
+
+  <!-- 8 plumbing: verification -> /chat (inside container edge) -->
+  <polyline class="arrow" points="845,570 832,570 832,240 841,240" marker-end="url(#arr)"/>
+  <text class="albl" transform="rotate(-90 823 420)" x="823" y="420" text-anchor="middle">verified response</text>
+
+  <!-- 9a: agent POSTs invocation record -> audit-bridge endpoint (new PHP in OpenEMR) -->
+  <polyline class="arrow" points="880,645 880,800 485,800 485,407 468,407" marker-end="url(#arr)"/>
+  <circle class="badge" cx="650" cy="800" r="12"/><text class="badge-t" x="650" y="804">9a</text>
+  <text class="albl" x="672" y="822" text-anchor="middle">9a — POST invocation record (user · patient · corr-ID · verification verdict) to the module&#8217;s audit-bridge endpoint</text>
+  <!-- bridge -> EventAuditLogger (in-process PHP call) -->
+  <line class="arrow" x1="362" y1="455" x2="362" y2="511" marker-end="url(#arr)"/>
+  <text class="albl" x="372" y="487" text-anchor="start">in-process PHP</text>
+
+  <!-- 9b: -> LangSmith -->
+  <line class="arrow" x1="1225" y1="560" x2="1296" y2="560" marker-end="url(#arr)"/>
+  <circle class="badge" cx="1262" cy="544" r="12"/><text class="badge-t" x="1262" y="548">9b</text>
+  <text class="albl" x="1262" y="582" text-anchor="middle">full trace</text>
+</svg>
+</div>
+
+<section class="grid">
+  <div class="card">
+    <h2>Request lifecycle</h2>
+    <ol>
+      <li><b>Physician opens the chart</b> and asks the panel a question (or requests the pre-visit snapshot).</li>
+      <li>Panel obtains a <b>SMART-on-FHIR token</b> from OpenEMR's OAuth2 server, bound to the logged-in user <em>and</em> the open patient.</li>
+      <li>Panel calls <code>/chat</code> with the token and a <b>fresh correlation ID</b> that follows the request everywhere.</li>
+      <li>Agent loop plans and calls <b>read-only tools</b> against OpenEMR's FHIR API using the user's token — the agent has no database credentials.</li>
+      <li>OpenEMR's <b>ACL + scope enforcement</b> runs on every read, exactly as for any API client.</li>
+      <li><b>LLM synthesis</b> (BAA-covered; minimum-necessary PHI; tiered models).</li>
+      <li>Draft + tool results pass through the <b>verification layer</b>: citation check, numeric check, clinical-rule flags — fail closed.</li>
+      <li><b>Verified, cited response streams back</b> to the panel; citations deep-link to source records.</li>
+      <li>Invocation is <b>audit-logged in OpenEMR</b> (9a — the agent POSTs to the co-pilot module's audit-bridge endpoint, which calls <code>EventAuditLogger</code> in-process; FHIR reads in step 4 are already audited natively) and <b>fully traced in LangSmith</b> (9b), joined by the correlation ID. Audit delivery failure alerts but doesn't block the response — the trace preserves reconstructability.</li>
+    </ol>
+  </div>
+
+  <div class="card">
+    <h2>Trust boundaries</h2>
+    <ul>
+      <li><b>① Browser ↔ OpenEMR</b> — existing session authentication, untouched.</li>
+      <li><b>② Agent service ↔ OpenEMR</b> — OAuth per request; the requesting user's token on every FHIR call; no standing credentials, no direct DB access. Authorization is <em>inherited</em> from the EMR's ACL and scopes, never re-implemented.</li>
+      <li><b>③ Agent ↔ external services</b> — BAA covers PHI at the LLM provider and LangSmith; minimum-necessary applies anyway (only the open patient's data; trace masking).</li>
+    </ul>
+    <h2 style="margin-top:16px">Known limitation (stated, not hidden)</h2>
+    <ul>
+      <li>OpenEMR's ACL is <b>role-based, not panel-based</b> — any chart-access role can open any chart. The agent inherits exactly that boundary: it does not widen the aperture, and misuse is a <em>detective</em> control (every access audited). Preventive panel scoping is roadmap.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Design invariants &amp; targets</h2>
+    <ul>
+      <li><b>Read-only:</b> zero write access to the EMR in v1 — collapses blast radius and most prompt-injection escalation paths.</li>
+      <li><b>Fail closed:</b> a claim citing an unknown resource ID is stripped; a response that can't be verified says so and links to source records.</li>
+      <li><b>Coverage disclosure:</b> a failed tool produces "labs unavailable," never a silently narrower summary.</li>
+      <li><b>Latency targets</b> (pending load tests): first token &lt; 3s · snapshot &lt; 10s · follow-ups &lt; 5s · p95 &lt; 15s.</li>
+      <li><b>Cost:</b> ≈ $0.02–0.10 per interaction; ≈ $1–2 per physician per day at 20 patients.</li>
+      <li><b>Traceability:</b> every capability maps to a use case in <code>USER.md</code> (UC-1 snapshot · UC-2 follow-ups · UC-3 interval change · UC-4 coverage/absence).</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  Draft companion to <code>ARCHITECTURE.md</code> — Clinical Co-Pilot on OpenEMR · AgentForge Week 1 · targets are design goals pending load testing.
+</footer>
+
+</body>
+</html>
