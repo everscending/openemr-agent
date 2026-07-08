@@ -63,8 +63,10 @@ summary.
 **Accountability.** Every invocation carries a correlation ID through every
 log line, tool call, and LLM interaction; is written to OpenEMR's own audit
 log (`EventAuditLogger`) with user, patient, and timestamp; and is traced in
-LangSmith. PHI in traces is covered by the assumed BAA over all third-party
-services; trace masking applies minimum-necessary anyway.
+LangSmith — via vendor-neutral OpenTelemetry instrumentation, so the trace
+backend is swappable by design (§7). PHI in traces is covered by the assumed
+BAA over all third-party services; trace masking applies minimum-necessary
+anyway.
 
 *(~500 words)*
 
@@ -86,7 +88,7 @@ flowchart LR
     UI -- "SMART launch token<br/>(user + patient context)" --> API
     ORCH -- "FHIR reads with<br/>the user's token" --> FHIR
     ORCH --> LLM[LLM provider<br/>BAA]
-    API --> LS[(LangSmith<br/>BAA-covered)]
+    API -- "OTel export" --> LS[(LangSmith<br/>BAA-covered, swappable)]
     API -. audit events .-> AUDIT
 ```
 
@@ -103,7 +105,7 @@ citations, numerics, and clinical-rule flags → response streams to the panel
 |---|---|---|
 | **Chart panel** | Custom module `oe-module-clinical-copilot` (`openemr.bootstrap.php` entry point), embedded in the patient summary via the sanctioned card-render event (no core edits) — the same hook the shipped `oe-module-dashboard-context` uses. Chat UI, streaming rendering, citation deep-links to source records. | `src/Events/Patient/Summary/Card/RenderEvent.php`, `src/Core/ModulesApplication.php`, `interface/patient_file/summary/`, `src/Common/Session/PatientSessionUtil.php` |
 | **Token handoff** | Panel obtains a SMART-on-FHIR token from OpenEMR's OAuth2 server, scoped to the logged-in user and the open patient. Short-lived; per-conversation. | `src/RestControllers/AuthorizationController.php`, `src/RestControllers/SMART/ScopePermissionParser.php` |
-| **Agent service** | Python/FastAPI. Minimal explicit tool-use loop (no heavy multi-agent framework — single agent, small tool set; multi-agent adds coordination failure modes no use case requires). Pydantic schemas are the contract for every tool input/output — contracts are the source of truth, not the implementation. Correlation-ID middleware. `/health` (process alive) and `/ready` (OpenEMR FHIR, LLM provider, LangSmith reachable — real checks, not unconditional 200s). | new code, `agent/` |
+| **Agent service** | Python/FastAPI. Minimal explicit tool-use loop (no heavy multi-agent framework — single agent, small tool set; multi-agent adds coordination failure modes no use case requires). Pydantic schemas are the contract for every tool input/output — contracts are the source of truth, not the implementation. Correlation-ID middleware. OpenTelemetry instrumentation (vendor-neutral; §7). `/health` (process alive) and `/ready` (OpenEMR FHIR, LLM provider, trace backend reachable — real checks, not unconditional 200s). | new code, `agent/` |
 | **Tools (read-only)** | `get_patient_snapshot` — parallel fan-out fetching demographics, active meds, problems, allergies, recent labs, last encounter in one step (UC-1). Targeted tools: `search_observations`, `get_medication_history`, `get_encounters_since`, `search_documents`, `get_immunizations` (UC-2/3/4). All are FHIR API calls with the user's token; none writes. | `src/Services/FHIR/Fhir*Service.php` (Patient, MedicationRequest, Condition, AllergyIntolerance, Observation, Encounter, DocumentReference) |
 | **Verification layer** | See §5. | `src/ClinicalDecisionRules/Interface/`, `src/Services/DrugService.php` |
 | **Audit + observability** | See §7. | `src/Common/Logging/EventAuditLogger.php`, `AuditConfig.php` |
@@ -273,18 +275,38 @@ bridge adds the missing **decision/disclosure log**.
   such precedent in the codebase (`library/MedEx/API.php:3107`, which blocks
   its workflow until a BAA is accepted).
 - *If the audit POST fails:* the response is not blocked — the invocation
-  remains durably recorded in service logs and the LangSmith trace (joined by
-  correlation ID), so disclosure accounting is reconstructable; the bridge
-  failure raises an alert. Fail-closed applies to verification; audit
-  delivery is fail-open-with-alarm.
+  remains durably recorded in service logs (joined by correlation ID), which
+  together with the EMR audit row are the **sole durable audit record**;
+  disclosure accounting is reconstructable from them alone. The observability
+  trace is deliberately *not* part of this chain: SaaS trace retention (days
+  to weeks by default) is far shorter than HIPAA's six-year accounting
+  horizon, and keeping the trace a disposable debugging aid is part of what
+  keeps the backend swappable (see Observability below). The bridge failure
+  raises an alert. Fail-closed applies to verification; audit delivery is
+  fail-open-with-alarm.
 
-**Observability (LangSmith, BAA-covered):** every step of every request is
-traced — tool calls with timings, LLM calls with token counts and cost,
-verification outcomes — keyed by the correlation ID that also appears in
-service logs and the EMR audit row, so a full trace reconstructs from logs
-alone. Service application logs contain pointers (correlation ID, resource
-IDs), never PHI content; trace content is masked to minimum-necessary even
-under the BAA.
+**Observability (LangSmith, BAA-covered — instrumented for portability):**
+every step of every request is traced — tool calls with timings, LLM calls
+with token counts and cost, verification outcomes — keyed by the correlation
+ID that also appears in service logs and the EMR audit row, so a full trace
+reconstructs from logs alone. Service application logs contain pointers
+(correlation ID, resource IDs), never PHI content; trace content is masked
+to minimum-necessary even under the BAA.
+
+**Portability is a design requirement, not an aspiration.** The vendor is
+intentionally replaceable, enforced by three rules: (a) the service emits
+**OpenTelemetry** spans — agent code never imports a vendor tracing SDK;
+LangSmith is an OTel exporter destination, configured, not coded against
+(the one permitted exception is a thin adapter module owning any
+vendor-specific eval-run API, so vendor surface stays in one file);
+(b) the trace backend appears in `/ready` as "trace backend," a
+configured dependency, not a named product; (c) the trace holds no
+compliance role — audit and disclosure accounting live entirely in service
+logs and the EMR audit trail (above), so trace retention limits and
+platform migrations never touch the compliance story. Consequence: moving
+to another backend (Braintrust, self-hosted Langfuse) is an exporter-config
+change plus one adapter file — the "adapter swap, not a re-architecture"
+claim in §9 is engineered here, not asserted.
 
 **Dashboard & alerts:** real-time dashboard of request count, error rate,
 p50/p95 latency, tool-call and retry counts, token cost, and verification
@@ -324,8 +346,14 @@ boundary, an invariant, or a regression risk (no happy-path-only suite):
 
 Ground truth comes from the synthetic patient set (demo/Synthea data only,
 per project constraints), where the "right answer" is known by construction.
-Evals run in CI on every prompt or tool change; LangSmith datasets/
-experiments hold the suite and results history.
+Evals run in CI on every prompt or tool change. **The suite's source of
+truth is the repo, not the platform:** cases live as versioned fixtures
+alongside the code — the eval asset accumulates in git and is reviewable in
+PRs. LangSmith is the runner and results-history viewer; its datasets are
+synced *from* the fixtures, never authored in the platform. This keeps the
+most accumulative (and otherwise most vendor-sticky) asset portable:
+switching eval platforms means re-pointing the runner, not migrating the
+suite (§7 portability rules).
 
 ## 9. Model, Framework, and Stack Choices
 
@@ -335,7 +363,7 @@ experiments hold the suite and results history.
 | Agent framework | Minimal explicit tool-use loop | LangGraph-scale orchestration; multi-agent | Single agent, ~6 tools: a loop I can fully explain beats a framework I'd debug under deadline. No use case requires multi-agent coordination. |
 | Contracts | Pydantic on every tool I/O | Untyped dicts | Contracts as source of truth; malformed data fails at the boundary, not mid-conversation. |
 | Service | FastAPI | PHP in-process | Ecosystem, non-blocking long calls, independent scaling, clean trust boundary (§ Summary). |
-| Observability | LangSmith | Self-hosted Langfuse | Criterion: PHI-bearing traces must be BAA-covered or in-boundary. BAA confirmed for all third-party services, so tiebreakers decide: one platform for tracing + evals + dashboards, zero ops during the sprint. Self-hosted Langfuse remains the stated fallback for a deployment without a BAA — an adapter swap, not a re-architecture. |
+| Observability | LangSmith, behind portable instrumentation (OTel spans, repo-held eval fixtures — §7, §8) | Braintrust; self-hosted Langfuse | Criterion: PHI-bearing traces must be BAA-covered or in-boundary. Both LangSmith and Braintrust gate the BAA behind Enterprise contracts, so the criterion ties and tiebreakers decide: one platform for tracing + evals + dashboards, zero ops during the sprint, vendor maturity. Braintrust is the strongest challenger — best-in-class eval ergonomics and a hybrid data plane that keeps traces in-boundary — and is the likely destination if we later switch. The design makes that switch deliberately cheap: agent code emits OTel and never imports a vendor SDK, eval cases live in git, and the trace carries no compliance role — so changing backends is an exporter-config change plus one adapter file, not a re-architecture. Self-hosted Langfuse remains the fallback for a deployment without any BAA. |
 | Data access | FHIR API with user token | Direct SQL / internal PHP services | Inherits ACL, scopes, and audit; SQL would bypass every enforcement layer and move authorization into my code. Cost: HTTP-hop latency, paid for by the parallel snapshot tool. |
 
 ## 10. Cost & Scale Outlook

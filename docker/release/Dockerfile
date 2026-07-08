@@ -167,10 +167,9 @@ RUN git clone https://github.com/openemr/openemr.git --branch "${OPENEMR_VERSION
 FROM base AS openemr-composer
 COPY --from=openemr-source /openemr /openemr
 WORKDIR /openemr
-# Note: no buildkit cache mount here — Railway requires cache mount ids in
-# the service-specific format s/<service-id>-<target-path>, so the mount is
-# omitted to keep this Dockerfile portable.
-RUN composer install --no-dev --optimize-autoloader \
+# Use Docker buildkit cache mount for Composer cache (requires DOCKER_BUILDKIT=1)
+RUN --mount=type=cache,target=/root/.composer/cache \
+    composer install --no-dev --optimize-autoloader \
     && composer dump-autoload --optimize --apcu
 
 # Stage 3: Build frontend assets (npm)
@@ -179,10 +178,9 @@ FROM base AS openemr-assets
 COPY --from=openemr-source /openemr /openemr
 WORKDIR /openemr
 RUN apk add --no-cache build-base nodejs npm
-# Note: no buildkit cache mount here — Railway requires cache mount ids in
-# the service-specific format s/<service-id>-<target-path>, so the mount is
-# omitted to keep this Dockerfile portable.
-RUN npm install --unsafe-perm \
+# Use Docker buildkit cache mount for npm cache (requires DOCKER_BUILDKIT=1)
+RUN --mount=type=cache,target=/root/.npm \
+    npm install --unsafe-perm \
     && npm run build \
     && cd ccdaservice \
     && npm install --unsafe-perm \
@@ -240,9 +238,7 @@ WORKDIR /var/www/localhost/htdocs/openemr
 
 # Define volumes for SSL certificates and Let's Encrypt certificates
 # These volumes persist certificates across container restarts
-# Note: the VOLUME instruction is not supported on Railway (use Railway
-# Volumes instead), so it is intentionally omitted here.
-# VOLUME [ "/etc/letsencrypt/", "/etc/ssl" ]
+VOLUME [ "/etc/letsencrypt/", "/etc/ssl" ]
 
 # ============================================================================
 # APACHE AND PHP CONFIGURATION FILES

@@ -1,7 +1,14 @@
 # syntax=docker/dockerfile:1
 # ============================================================================
-# OpenEMR Dockerfile for Version 8.1.1
+# OpenEMR Dockerfile for Version 8.1.1 — Railway variant (local source)
 # ============================================================================
+# Differences from ./Dockerfile:
+#   - Builds the LOCAL checkout: the source stage COPYs the build context
+#     (the repository root) instead of git-cloning upstream openemr/openemr.
+#   - Expects the build context to be the REPO ROOT, so all COPYs of files
+#     that live next to this Dockerfile are prefixed with docker/release/.
+#   - Deploy with: railway up . (dockerfilePath=docker/release/Dockerfile.railway)
+#
 # This Dockerfile builds a production-ready OpenEMR container image with:
 #   - Apache web server for serving OpenEMR
 #   - PHP 8.5 with all required extensions
@@ -149,18 +156,16 @@ RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/bin -
 # ============================================================================
 # MULTI-STAGE BUILD: OpenEMR Source and Dependencies
 # ============================================================================
-# Stage 1: Fetch OpenEMR source code via git clone
-# Use git clone instead of GitHub archive because OpenEMR's .gitattributes
-# marks tests/, phpunit*.xml, and other dev files as export-ignore, which
-# excludes them from archives but not from clones.
-# Supports branches or tags via OPENEMR_VERSION build argument.
-# Examples:
-#   - Branch: --build-arg OPENEMR_VERSION=master
-#   - Tag:    --build-arg OPENEMR_VERSION=v7.0.5
-ARG OPENEMR_VERSION=master
+# Stage 1: Copy OpenEMR source code from the local checkout
+# The build context is the repository root, so the local codebase (including
+# any local modifications) is what gets baked into the image — unlike the
+# upstream release Dockerfile, which git-clones openemr/openemr.
+# OPENEMR_VERSION is retained only for the OCI revision label in the final
+# stage; it no longer selects the source.
+ARG OPENEMR_VERSION=local
 FROM base AS openemr-source
-RUN git clone https://github.com/openemr/openemr.git --branch "${OPENEMR_VERSION}" --depth 1 \
-    && rm -rf openemr/.git
+COPY . /openemr
+RUN rm -rf /openemr/.git
 
 # Stage 2: Install PHP dependencies (Composer)
 # Separate stage allows Docker to cache this layer independently
@@ -251,10 +256,10 @@ WORKDIR /var/www/localhost/htdocs/openemr
 ENV APACHE_LOG_DIR=/var/log/apache2
 
 # Copy PHP configuration file with OpenEMR-optimized settings
-COPY php.ini /etc/php${PHP_VERSION_ABBR}/php.ini
+COPY docker/release/php.ini /etc/php${PHP_VERSION_ABBR}/php.ini
 
 # Copy Apache virtual host configuration for OpenEMR
-COPY openemr.conf /etc/apache2/conf.d/
+COPY docker/release/openemr.conf /etc/apache2/conf.d/
 
 # ============================================================================
 # OPENEMR SCRIPTS AND UTILITIES
@@ -264,10 +269,10 @@ COPY openemr.conf /etc/apache2/conf.d/
 # - ssl.sh: SSL/TLS certificate management script
 # - xdebug.sh: XDebug configuration script (for development)
 # - auto_configure.php: Automated OpenEMR installation script
-COPY openemr.sh ssl.sh xdebug.sh auto_configure.php /var/www/localhost/htdocs/openemr/
+COPY docker/release/openemr.sh docker/release/ssl.sh docker/release/xdebug.sh docker/release/auto_configure.php /var/www/localhost/htdocs/openemr/
 
 # Copy admin unlock utilities (for password recovery)
-COPY utilities/unlock_admin.php utilities/unlock_admin.sh /root/
+COPY docker/release/utilities/unlock_admin.php docker/release/utilities/unlock_admin.sh /root/
 
 # Set script permissions:
 # - Executable scripts: 500 (read and execute for owner only)
@@ -281,18 +286,18 @@ RUN chmod 500 openemr.sh ssl.sh xdebug.sh /root/unlock_admin.sh \
 # Copy upgrade scripts and version tracking file
 # These scripts handle filesystem upgrades when moving between OpenEMR versions
 # The docker-version file tracks the installed version for upgrade detection
-COPY upgrade/docker-version \
-     upgrade/fsupgrade-1.sh \
-     upgrade/fsupgrade-2.sh \
-     upgrade/fsupgrade-3.sh \
-     upgrade/fsupgrade-4.sh \
-     upgrade/fsupgrade-5.sh \
-     upgrade/fsupgrade-6.sh \
-     upgrade/fsupgrade-7.sh \
-     upgrade/fsupgrade-8.sh \
-     upgrade/fsupgrade-9.sh \
-     upgrade/fsupgrade-10.sh \
-     upgrade/fsupgrade-11.sh \
+COPY docker/release/upgrade/docker-version \
+     docker/release/upgrade/fsupgrade-1.sh \
+     docker/release/upgrade/fsupgrade-2.sh \
+     docker/release/upgrade/fsupgrade-3.sh \
+     docker/release/upgrade/fsupgrade-4.sh \
+     docker/release/upgrade/fsupgrade-5.sh \
+     docker/release/upgrade/fsupgrade-6.sh \
+     docker/release/upgrade/fsupgrade-7.sh \
+     docker/release/upgrade/fsupgrade-8.sh \
+     docker/release/upgrade/fsupgrade-9.sh \
+     docker/release/upgrade/fsupgrade-10.sh \
+     docker/release/upgrade/fsupgrade-11.sh \
      /root/
 
 # Set upgrade scripts as executable (read and execute for owner only)
@@ -321,7 +326,7 @@ RUN mkdir -p /run/apache2
 # ============================================================================
 # Copy shared library of utility functions used by OpenEMR scripts
 # This library provides database operations, configuration helpers, etc.
-COPY utilities/devtoolsLibrary.source /root/
+COPY docker/release/utilities/devtoolsLibrary.source /root/
 
 # ============================================================================
 # SWARM MODE SUPPORT
@@ -414,7 +419,7 @@ COPY --from=production /swarm-pieces /swarm-pieces
 RUN mkdir -p /run/apache2
 
 # Copy kcov wrapper script
-COPY kcov-wrapper.sh /var/www/localhost/htdocs/openemr
+COPY docker/release/kcov-wrapper.sh /var/www/localhost/htdocs/openemr
 RUN chmod 500 /var/www/localhost/htdocs/openemr/kcov-wrapper.sh
 
 # Create directory for coverage report output
