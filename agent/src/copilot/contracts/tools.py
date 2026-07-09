@@ -15,6 +15,7 @@ from datetime import date
 from pydantic import AwareDatetime, Field, model_validator
 
 from copilot.contracts.base import ContractModel
+from copilot.contracts.coverage import CategoryCoverage
 from copilot.contracts.refs import ResourceRef
 
 # ---------------------------------------------------------------------------
@@ -111,10 +112,16 @@ class ObservationRecord(OutputRecord):
 
 
 class MedicationRecord(OutputRecord):
-    """A medication request/history entry."""
+    """A medication request/history entry.
+
+    ``source`` names which FHIR-exposed medication list the record came
+    from (e.g. ``"prescriptions"``) so downstream consumers can tell the
+    two OpenEMR medication sources apart (reconciliation itself is T007).
+    """
 
     medication: str = Field(min_length=1)
     status: str | None = None
+    source: str | None = None
 
 
 class EncounterRecord(OutputRecord):
@@ -144,11 +151,22 @@ class ImmunizationRecord(OutputRecord):
 
 
 class PatientSnapshotOutput(ContractModel):
-    """Output of ``get_patient_snapshot``."""
+    """Output of ``get_patient_snapshot``.
 
-    patient: PatientRecord
+    ``patient`` is ``None`` when the demographics fetch itself failed —
+    that failure is reported in ``coverage`` rather than failing the whole
+    snapshot (graceful degradation, ARCHITECTURE.md section 7). ``coverage``
+    carries one entry per snapshot category on every call so the physician
+    always knows what was and wasn't checked.
+    """
+
+    patient: PatientRecord | None = None
     conditions: tuple[ConditionRecord, ...] = ()
     allergies: tuple[AllergyRecord, ...] = ()
+    medications: tuple[MedicationRecord, ...] = ()
+    labs: tuple[ObservationRecord, ...] = ()
+    last_encounter: EncounterRecord | None = None
+    coverage: tuple[CategoryCoverage, ...] = ()
 
 
 class SearchObservationsOutput(ContractModel):
