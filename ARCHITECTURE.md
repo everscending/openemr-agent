@@ -190,15 +190,37 @@ would leave nothing deterministic to check against.
 **Layer 1 — Source attribution (hot path, deterministic).**
 - Tools return structured FHIR resources; every resource carries its ID.
 - The system prompt requires a citation `[ResourceType/id]` on every clinical
-  claim.
+  claim — and on **every resource that claim relies on**, not merely the one
+  it is nominally about. A claim derived from another resource's value cites
+  that resource too. This is what keeps inter-claim dependency deterministic:
+  a claim resting on a fabricated source carries the fabricated ID and is
+  stripped along with it. Dependency is expressed *as a citation*, because a
+  citation is checkable against tool results and a self-reported "depends-on"
+  edge is not. Omitting a citation fails closed (the claim is stripped);
+  omitting an edge would fail open (the dependent claim would survive). We
+  therefore never ask the model to declare its own reasoning structure.
 - A post-generation, non-LLM check validates: every cited ID ∈ the set of IDs
-  returned by this request's tool calls. Cost: milliseconds; cannot itself
+  returned by this request's tool calls, keyed by **type + id** (citing a real
+  ID under the wrong resource type fails). Cost: milliseconds; cannot itself
   hallucinate.
 - Where a claim contains parseable numerics (value/unit/date), they are
   compared against the cited resource's actual fields.
-- **Fail closed:** a claim citing an unknown ID is stripped and the response
-  annotated; a response that loses its substance to stripping is replaced
-  with "couldn't verify — view source records" plus deep links.
+- **Fail closed:** a claim citing an unknown ID, citing an ID under the wrong
+  resource type, or carrying no citation at all is stripped. The response is
+  annotated — a machine-readable list of stripped claims with reasons, a
+  user-visible marker that content was removed, and the `ResourceRef`s that
+  *were* available, with deep links. Surviving claims are shown.
+- **No fractional floor.** If no claim-bearing sentence survives, the response
+  is replaced entirely with "couldn't verify — view source records" plus the
+  available refs and deep links: there is nothing left to show. Otherwise the
+  survivors are emitted with the removal annotation. There is deliberately no
+  "N% stripped ⇒ discard everything" threshold — any such number would discard
+  individually-verified claims on a statistical hunch about the response as a
+  whole, and no principled value for it exists. Verification counts (claims
+  total / passed / stripped, by failure kind) are emitted for observability,
+  and the offline eval suite measures how often stripping guts a response.
+  Whether that rate justifies a stricter whole-response fail-closed rule is a
+  decision deferred to measured data rather than guessed in advance.
 
 **Layer 2 — Domain constraints (hot path, rule-based).**
 - Medication-related responses run through OpenEMR's drug-interaction
