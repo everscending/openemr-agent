@@ -32,6 +32,7 @@ from copilot.contracts.coverage import (
     CoverageVerifiedEmpty,
 )
 from copilot.contracts.tools import (
+    SNAPSHOT_CATEGORIES,
     AllergyRecord,
     ConditionRecord,
     EncounterRecord,
@@ -58,16 +59,10 @@ DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = 30.0
 DEFAULT_LABS_TIMEOUT_SECONDS = 10.0
 LABS_COUNT_BOUND = 20
 
-# The six snapshot categories, in reporting order. Coverage output carries
+# SNAPSHOT_CATEGORIES (the six categories, in reporting order) now lives in the
+# contracts layer as the single source of truth and is imported above; it stays
+# importable from this module for existing callers. Coverage output carries
 # exactly one entry per category on every call.
-SNAPSHOT_CATEGORIES: tuple[str, ...] = (
-    "demographics",
-    "medications",
-    "problems",
-    "allergies",
-    "labs",
-    "last_encounter",
-)
 
 
 @dataclass(frozen=True, slots=True)

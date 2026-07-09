@@ -19,6 +19,21 @@ from copilot.contracts.coverage import CategoryCoverage
 from copilot.contracts.reconciliation import MedicationReconciliation
 from copilot.contracts.refs import ResourceRef
 
+# The six patient-data categories ``get_patient_snapshot`` fetches, in reporting
+# order (ARCHITECTURE.md §2/§7). This lives in the contracts layer — the single
+# source of truth for tool I/O — so pure consumers (e.g. the deterministic
+# verification layer) can source the category set without importing the IO layer
+# (``copilot.tools.snapshot`` pulls the FHIR/httpx client). ``tools/snapshot.py``
+# re-imports this so there is exactly one definition and no drift.
+SNAPSHOT_CATEGORIES: tuple[str, ...] = (
+    "demographics",
+    "medications",
+    "problems",
+    "allergies",
+    "labs",
+    "last_encounter",
+)
+
 # ---------------------------------------------------------------------------
 # Inputs
 # ---------------------------------------------------------------------------

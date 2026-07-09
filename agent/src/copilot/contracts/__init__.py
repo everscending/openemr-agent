@@ -41,12 +41,25 @@ from copilot.contracts.tools import (
     QueryReceipt,
     SearchDocumentsInput,
     SearchDocumentsOutput,
+    SNAPSHOT_CATEGORIES,
     SearchObservationsInput,
     SearchObservationsOutput,
     ToolInput,
 )
+from copilot.contracts.verification import (
+    ClaimStatus,
+    ClaimVerdict,
+    StrippedClaim,
+    VerificationCounts,
+    VerificationVerdict,
+)
 
 __all__ = [
+    "ClaimStatus",
+    "ClaimVerdict",
+    "StrippedClaim",
+    "VerificationCounts",
+    "VerificationVerdict",
     "AllergyRecord",
     "CategoryCoverage",
     "ConditionRecord",
@@ -72,6 +85,7 @@ __all__ = [
     "MedicationRecord",
     "ObservationRecord",
     "ReconciledMedication",
+    "SNAPSHOT_CATEGORIES",
     "SourceStatus",
     "OutputRecord",
     "PatientRecord",
