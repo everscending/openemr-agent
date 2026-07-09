@@ -11,6 +11,13 @@ from copilot.contracts.coverage import (
     CoverageUnavailable,
     CoverageVerifiedEmpty,
 )
+from copilot.contracts.reconciliation import (
+    InteractionCheck,
+    MedicationConflict,
+    MedicationReconciliation,
+    ReconciledMedication,
+    SourceStatus,
+)
 from copilot.contracts.refs import FhirResourceType, ResourceRef
 from copilot.contracts.tools import (
     AllergyRecord,
@@ -59,8 +66,13 @@ __all__ = [
     "GetMedicationHistoryOutput",
     "GetPatientSnapshotInput",
     "ImmunizationRecord",
+    "InteractionCheck",
+    "MedicationConflict",
+    "MedicationReconciliation",
     "MedicationRecord",
     "ObservationRecord",
+    "ReconciledMedication",
+    "SourceStatus",
     "OutputRecord",
     "PatientRecord",
     "PatientSnapshotOutput",

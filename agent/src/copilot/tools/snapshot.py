@@ -42,6 +42,7 @@ from copilot.contracts.tools import (
     PatientSnapshotOutput,
 )
 from copilot.fhir import FhirClient
+from copilot.tools.reconciliation import reconcile_medications
 from copilot.tools.mapping import (
     MEDICATION_SOURCE_PRESCRIPTIONS,
     allergy_record_from,
@@ -161,6 +162,16 @@ async def _run_snapshot(
     demographics_records = by_category["demographics"][0]
     encounter_records = by_category["last_encounter"][0]
 
+    medication_records = tuple(
+        r for r in by_category["medications"][0] if isinstance(r, MedicationRecord)
+    )
+    # Reconcile across sources so source conflicts surface and resolved meds
+    # are split off (T007). None only when the category itself failed.
+    medications_available = by_category["medications"][1].status != "unavailable"
+    medication_reconciliation = (
+        reconcile_medications(medication_records) if medications_available else None
+    )
+
     return PatientSnapshotOutput(
         patient=(
             demographics_records[0]
@@ -168,9 +179,8 @@ async def _run_snapshot(
             and isinstance(demographics_records[0], PatientRecord)
             else None
         ),
-        medications=tuple(
-            r for r in by_category["medications"][0] if isinstance(r, MedicationRecord)
-        ),
+        medications=medication_records,
+        medication_reconciliation=medication_reconciliation,
         conditions=tuple(
             r for r in by_category["problems"][0] if isinstance(r, ConditionRecord)
         ),

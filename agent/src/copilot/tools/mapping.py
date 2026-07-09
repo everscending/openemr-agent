@@ -165,7 +165,35 @@ def medication_record_from(
         medication=medication,
         status=status if isinstance(status, str) and status else None,
         source=source,
+        rxnorm=rxnorm_code(resource.get("medicationCodeableConcept")),
     )
+
+
+def rxnorm_code(concept: Any) -> str | None:
+    """Extract the RxNorm code from a FHIR CodeableConcept, if coded.
+
+    Only a coding whose ``system`` names RxNorm counts — free-text-only
+    concepts (AUDIT.md D3) yield ``None`` so downstream reconciliation can
+    mark the medication uncoded.
+    """
+    if not isinstance(concept, dict):
+        return None
+    codings = concept.get("coding")
+    if not isinstance(codings, list):
+        return None
+    for coding in codings:
+        if not isinstance(coding, dict):
+            continue
+        system = coding.get("system")
+        code = coding.get("code")
+        if (
+            isinstance(system, str)
+            and "rxnorm" in system.lower()
+            and isinstance(code, str)
+            and code
+        ):
+            return code
+    return None
 
 
 def condition_record_from(resource: dict[str, Any]) -> ConditionRecord | None:

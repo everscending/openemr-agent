@@ -16,6 +16,7 @@ from pydantic import AwareDatetime, Field, model_validator
 
 from copilot.contracts.base import ContractModel
 from copilot.contracts.coverage import CategoryCoverage
+from copilot.contracts.reconciliation import MedicationReconciliation
 from copilot.contracts.refs import ResourceRef
 
 # ---------------------------------------------------------------------------
@@ -128,12 +129,15 @@ class MedicationRecord(OutputRecord):
 
     ``source`` names which FHIR-exposed medication list the record came
     from (e.g. ``"prescriptions"``) so downstream consumers can tell the
-    two OpenEMR medication sources apart (reconciliation itself is T007).
+    two OpenEMR medication sources apart. ``rxnorm`` carries the RxNorm
+    code when present; its absence drives the uncoded-medication
+    interaction-check marker during reconciliation (T007).
     """
 
     medication: str = Field(min_length=1)
     status: str | None = None
     source: str | None = None
+    rxnorm: str | None = None
 
 
 class EncounterRecord(OutputRecord):
@@ -189,6 +193,7 @@ class PatientSnapshotOutput(ContractModel):
     conditions: tuple[ConditionRecord, ...] = ()
     allergies: tuple[AllergyRecord, ...] = ()
     medications: tuple[MedicationRecord, ...] = ()
+    medication_reconciliation: MedicationReconciliation | None = None
     labs: tuple[ObservationRecord, ...] = ()
     last_encounter: EncounterRecord | None = None
     coverage: tuple[CategoryCoverage, ...] = ()
