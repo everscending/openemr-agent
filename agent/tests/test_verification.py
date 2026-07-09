@@ -130,6 +130,42 @@ def test_verifier_module_imports_no_llm_or_network_client() -> None:
     assert leaked == set(), f"verifier must not import network/LLM clients: {leaked}"
 
 
+def test_importing_verifier_pulls_no_network_or_llm_module() -> None:
+    """Transitive guarantee (rev 3b): importing the verifier must not drag in the
+    network/IO/LLM layer at all. An AST scan of one module's source sees only its
+    *direct* imports; this imports the verifier in a clean subprocess and
+    inspects the entire resulting module graph via ``sys.modules``.
+    """
+    import os
+    import subprocess
+    import sys
+
+    agent_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = os.path.join(agent_root, "src")
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = src + (os.pathsep + existing if existing else "")
+
+    code = (
+        "import importlib, sys\n"
+        "importlib.import_module('copilot.verification')\n"
+        "forbidden = ('httpx', 'anthropic', 'openai', 'requests', 'aiohttp')\n"
+        "print(','.join(sorted(m for m in forbidden if m in sys.modules)))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        cwd=agent_root,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    leaked = result.stdout.strip()
+    assert leaked == "", (
+        f"importing the verifier transitively pulled network/LLM modules: {leaked}"
+    )
+
+
 def test_verify_returns_structured_verdict() -> None:
     refs = (ref("Observation", "obs-1"),)
     verdict = verify("BP is 128 mmHg [Observation/obs-1].", refs)
@@ -369,6 +405,30 @@ def test_possessive_coverage_survives() -> None:
 
 def test_absence_of_allergies_on_record_survives() -> None:
     _assert_survives_as_scaffolding("No allergies are on record.")
+
+
+# --- Absence OBJECT constraint (rev 3b): a *finding* is not a data category ---
+# The marker alone is not enough — "recorded"/"documented"/"on record" are valid
+# markers, so what is absent must itself be a data category, never a finding.
+# Each of these is a finding dressed as an absence line and must be STRIPPED.
+
+
+def test_no_signs_of_infection_documented_is_stripped() -> None:
+    _assert_stripped_as_uncited_claim("No signs of infection were documented.")
+
+
+def test_no_improvement_recorded_is_stripped() -> None:
+    _assert_stripped_as_uncited_claim("No improvement is recorded.")
+
+
+def test_no_acute_distress_on_record_is_stripped() -> None:
+    # Same marker ("on record") as the surviving colonoscopy line, so only an
+    # OBJECT constraint — not a marker constraint — can strip this.
+    _assert_stripped_as_uncited_claim("No acute distress is on record.")
+
+
+def test_no_metastatic_disease_documented_is_stripped() -> None:
+    _assert_stripped_as_uncited_claim("No metastatic disease was documented.")
 
 
 # --- The data-category noun set is sourced from the tool categories ---
