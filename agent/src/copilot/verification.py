@@ -72,14 +72,19 @@ the fallback decision, because scaffolding is never counted.
 
 from __future__ import annotations
 
+import datetime
 import re
 from collections.abc import Iterable
+from decimal import Decimal, InvalidOperation
 
 from copilot.contracts.refs import FhirResourceType, ResourceRef
 from copilot.contracts.tools import SNAPSHOT_CATEGORIES
 from copilot.contracts.verification import (
     ClaimStatus,
     ClaimVerdict,
+    NumericCheck,
+    NumericFinding,
+    ResourceFacts,
     StrippedClaim,
     VerificationCounts,
     VerificationVerdict,
@@ -522,6 +527,345 @@ _STRIP_REASONS: dict[ClaimStatus, str] = {
 
 
 # ---------------------------------------------------------------------------
+# Layer 1 content check — numeric/date claim vs. cited resource (T009)
+# ---------------------------------------------------------------------------
+#
+# T008 grounds a claim's *citation*; this checks the claim's *content* against
+# the cited resource's structured fields. A grounded citation with a fabricated
+# value is the failure T008 cannot catch alone (ARCHITECTURE.md §5).
+#
+# Rules (rev-2 ticket, made — not chosen here):
+#   * No tolerance — exact ``Decimal`` compare (``8.20`` == ``8.2``; ``8.19``
+#     does not). Decimal equality already ignores trailing zeros.
+#   * Units, in order: both known & convertible → convert then compare; both
+#     known & not convertible → mismatch/strip; either absent/unknown → compare
+#     values anyway (unit not a failure). Minimal table only.
+#   * ``unchecked`` is a pass-through, so it is used *only* when no comparison
+#     is possible — never to dodge a comparison that could run.
+#   * Multiple cited resources: a quantity passes if it matches at least one
+#     comparable one; strips if ≥1 is comparable and none match; unchecked only
+#     if none is comparable.
+#   * Non-measurement numbers are masked before scalar extraction (rev-2
+#     tightening, orchestrator-mandated) — see ``_mask_non_measurement_numbers``
+#     below, next to the ratio/date masking it complements. A bare integer
+#     inside ordinary prose (a diagnosis code, a disease classifier, a bare
+#     year) is not a measurement; comparing it against a cited resource's value
+#     produced false strips of true, correctly grounded claims (e.g. "treated
+#     for COVID-19" stripped against an unrelated A1c value). The bias is
+#     explicit: a false *survive* (a fabricated value passing) is more
+#     dangerous than a false *strip*, so bare scalars remain comparable and can
+#     still strip — only the non-measurement contexts below are masked first.
+
+#: Minimal unit table. Each unit maps to (dimension, factor-to-dimension-base).
+#: Same dimension ⇒ convertible (compare value * factor). Different known
+#: dimensions ⇒ non-convertible ⇒ mismatch. ``%``, ``mmol/L`` are their own
+#: dimensions (compared only to themselves). Deliberately not a general library.
+_UNIT_TABLE: dict[str, tuple[str, Decimal]] = {
+    "mcg": ("mass", Decimal(1)),
+    "mg": ("mass", Decimal(1000)),
+    "g": ("mass", Decimal(1_000_000)),
+    "ml": ("volume", Decimal(1)),
+    "l": ("volume", Decimal(1000)),
+    "%": ("percent", Decimal(1)),
+    "mmol/l": ("concentration", Decimal(1)),
+}
+
+_MONTHS: dict[str, int] = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+# A number optionally followed (adjacency, ≤1 space) by a unit token: ``%`` or a
+# short alphabetic token, optionally ``word/word`` (mmol/L, mg/dL). Ratios and
+# dates are masked out of the text *before* this runs (see ``_extract_quantities``).
+_QUANTITY_RE = re.compile(
+    r"(?<![\w.])(-?\d+(?:\.\d+)?)\s*(%|[A-Za-z]+(?:/[A-Za-z]+)?)?"
+)
+# A digit/digit ratio (blood pressure ``120/80``): not two comparable scalars.
+_RATIO_RE = re.compile(r"\d+(?:\.\d+)?\s*/\s*\d+(?:\.\d+)?")
+_ISO_DATE_RE = re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)")
+_MONTH_DATE_RE = re.compile(
+    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+"
+    r"(?:(\d{1,2})(?:st|nd|rd|th)?,?\s+)?(\d{4})\b",
+    re.IGNORECASE,
+)
+
+# --- Non-measurement number masks (rev-2 tightening) ------------------------
+#
+# Applied, in this order, to the text after ratios/dates are already masked
+# out and *before* ``_QUANTITY_RE`` runs. None of these three ever touches a
+# real measurement: "A1c is 7.1" (bare, no unit) still extracts and can still
+# strip against a contradicting resource.
+#
+#   1. Hyphenated/adjacent alphanumeric compounds: a digit run whose immediate
+#      neighbor — skipping one hyphen — is a letter. ``COVID-19``,
+#      ``SARS-CoV-2`` (via its ``CoV-2`` segment), ``obs-1``. (A digit run
+#      *directly* touching a letter with no hyphen — ``B12``, ``T2``,
+#      ``HbA1c`` — is already excluded: ``_QUANTITY_RE``'s own
+#      ``(?<![\w.])`` lookbehind means it never matches as a quantity to begin
+#      with, so no separate rule is needed for that case.)
+#   2. Bare four-digit years (``19xx``/``20xx``) with **no adjacent unit** —
+#      "diagnosed in 2019". A full ISO or "Month YYYY" date is already
+#      consumed by the date path before this runs, so this only ever fires on
+#      a genuinely bare year. A year directly followed by a real unit (e.g. a
+#      contrived "2019 mg") is left alone — the adjacent-unit carve-out means
+#      it is still a measurement candidate.
+#   3. Classifier-prefixed numbers: a number immediately preceded by
+#      type/stage/grade/class/phase/level/factor/trimester (case-insensitive)
+#      — "Type 2 diabetes", "stage 3 CKD", "grade 2 sarcoma".
+_HYPHEN_ALNUM_RE = re.compile(r"[A-Za-z]+-\d+(?:\.\d+)?|\d+(?:\.\d+)?-[A-Za-z]+")
+_BARE_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b(?!\s*(?:%|[A-Za-z]))")
+_CLASSIFIER_WORDS: tuple[str, ...] = (
+    "type",
+    "stage",
+    "grade",
+    "class",
+    "phase",
+    "level",
+    "factor",
+    "trimester",
+)
+_CLASSIFIER_NUMBER_RE = re.compile(
+    r"\b(?:" + "|".join(_CLASSIFIER_WORDS) + r")\s+\d+(?:\.\d+)?\b",
+    re.IGNORECASE,
+)
+
+
+def _norm_unit(unit: str | None) -> str | None:
+    if unit is None:
+        return None
+    normalized = unit.strip().lower()
+    return normalized or None
+
+
+def _mask(text: str, start: int, end: int) -> str:
+    """Blank out ``text[start:end]`` (preserving length) so masked digits are
+    never re-read as numeric quantities."""
+    return text[:start] + (" " * (end - start)) + text[end:]
+
+
+def _extract_dates(text: str) -> tuple[list[tuple[int, int, int | None]], str]:
+    """Extract claim dates and return them plus the text with their spans masked.
+
+    Masking removes the date's own digits (year/month/day) from the residue so
+    they cannot collide with a cited numeric value.
+    """
+    dates: list[tuple[int, int, int | None]] = []
+    masked = text
+    for match in _ISO_DATE_RE.finditer(text):
+        year, month, day = (int(g) for g in match.groups())
+        masked = _mask(masked, match.start(), match.end())
+        if month == 0 or day == 0:
+            continue  # a zero date is "unknown" — not a real claim date
+        try:
+            datetime.date(year, month, day)
+        except ValueError:
+            continue
+        dates.append((year, month, day))
+    for match in _MONTH_DATE_RE.finditer(text):
+        month = _MONTHS[match.group(1).lower()[:3]]
+        day = int(match.group(2)) if match.group(2) is not None else None
+        year = int(match.group(3))
+        masked = _mask(masked, match.start(), match.end())
+        dates.append((year, month, day))
+    return dates, masked
+
+
+def _mask_non_measurement_numbers(text: str) -> str:
+    """Blank number spans that are diagnosis codes/classifiers/bare years, not
+    measurements (rev-2 tightening). See the constants above for the three
+    patterns and why each exists. Applied after ratio/date masking and before
+    ``_QUANTITY_RE`` runs.
+    """
+    masked = text
+    for pattern in (_HYPHEN_ALNUM_RE, _BARE_YEAR_RE, _CLASSIFIER_NUMBER_RE):
+        for match in pattern.finditer(masked):
+            masked = _mask(masked, match.start(), match.end())
+    return masked
+
+
+def _extract_quantities(text: str) -> list[tuple[Decimal, str | None]]:
+    """Extract (value, optional unit) scalar quantities from claim text.
+
+    Citations, dates, digit/digit ratios, and non-measurement number contexts
+    (diagnosis codes, classifiers, bare years — see
+    ``_mask_non_measurement_numbers``) are masked first so only genuine scalar
+    quantities remain.
+    """
+    without_citations = _CITATION_RE.sub("  ", text)
+    _dates, masked = _extract_dates(without_citations)
+    for match in _RATIO_RE.finditer(masked):
+        masked = _mask(masked, match.start(), match.end())
+    masked = _mask_non_measurement_numbers(masked)
+
+    quantities: list[tuple[Decimal, str | None]] = []
+    for match in _QUANTITY_RE.finditer(masked):
+        try:
+            value = Decimal(match.group(1))
+        except InvalidOperation:
+            continue
+        quantities.append((value, _norm_unit(match.group(2))))
+    return quantities
+
+
+def _parse_resource_date(raw: str | None) -> datetime.date | None:
+    """Parse a resource date defensively (§8): ``0000-00-00``, empty, and
+    unparseable inputs are "unknown" (``None``) and never raise; a zero month or
+    day is likewise unknown. Only a valid calendar date returns a ``date``.
+    """
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    match = re.match(r"(\d{4})-(\d{2})-(\d{2})", text)
+    if match is None:
+        return None
+    year, month, day = (int(g) for g in match.groups())
+    if month == 0 or day == 0:
+        return None
+    try:
+        return datetime.date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _fmt_quantity(value: Decimal, unit: str | None) -> str:
+    return f"{value} {unit}" if unit else f"{value}"
+
+
+def _fmt_date(year: int, month: int, day: int | None) -> str:
+    if day is None:
+        return f"{year:04d}-{month:02d}"
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def _values_match(
+    claim_value: Decimal,
+    claim_unit: str | None,
+    resource_value: Decimal,
+    resource_unit: str | None,
+) -> tuple[bool, bool]:
+    """Compare one claim quantity to one resource value.
+
+    Returns ``(matched, unit_checked)``. Both units known: convertible ⇒ compare
+    converted values (unit checked); non-convertible ⇒ no match (unit checked).
+    Either unit absent/unknown ⇒ compare raw values, unit not checked.
+    """
+    cu = _norm_unit(claim_unit)
+    ru = _norm_unit(resource_unit)
+    if cu in _UNIT_TABLE and ru in _UNIT_TABLE:
+        c_dim, c_factor = _UNIT_TABLE[cu]  # type: ignore[index]
+        r_dim, r_factor = _UNIT_TABLE[ru]  # type: ignore[index]
+        if c_dim == r_dim:
+            return claim_value * c_factor == resource_value * r_factor, True
+        return False, True  # both known, different dimensions → mismatch
+    return claim_value == resource_value, False
+
+
+def _date_matches(
+    year: int, month: int, day: int | None, resource_date: datetime.date
+) -> bool:
+    """Day-precision match; a monthless claim ("Month YYYY") matches on y+m."""
+    if year != resource_date.year or month != resource_date.month:
+        return False
+    return day is None or day == resource_date.day
+
+
+def _content_check(
+    sentence: str, cited_facts: list[ResourceFacts]
+) -> tuple[ClaimStatus | None, NumericFinding]:
+    """Check a grounding-verified claim's numeric/date content against the facts
+    of the resources it cites. Returns ``(strip_status_or_None, finding)``."""
+    quantities = _extract_quantities(sentence)
+    dates, _masked = _extract_dates(_CITATION_RE.sub("  ", sentence))
+
+    value_facts = [f for f in cited_facts if f.value is not None]
+    comparable_dates = [
+        (f, parsed)
+        for f in cited_facts
+        if (parsed := _parse_resource_date(f.date)) is not None
+    ]
+    # A resource whose date string is present but unparseable/zero is "unknown".
+    resource_date_unknown = bool(dates) and any(
+        f.date is not None and _parse_resource_date(f.date) is None
+        for f in cited_facts
+    )
+
+    numeric_matched = False
+    numeric_unit_checked = True
+    numeric_claimed: str | None = None
+    numeric_actual: str | None = None
+    for value, unit in quantities:
+        if not value_facts:
+            continue  # this quantity has nothing comparable → unchecked
+        hit = False
+        hit_unit_checked = True
+        for fact in value_facts:
+            assert fact.value is not None
+            matched, unit_checked = _values_match(value, unit, fact.value, fact.unit)
+            if matched:
+                hit = True
+                hit_unit_checked = unit_checked
+                break
+        if hit:
+            numeric_matched = True
+            if not hit_unit_checked:
+                numeric_unit_checked = False
+        elif numeric_claimed is None:
+            numeric_claimed = _fmt_quantity(value, unit)
+            numeric_actual = _fmt_quantity(value_facts[0].value, value_facts[0].unit)  # type: ignore[arg-type]
+
+    date_matched = False
+    date_claimed: str | None = None
+    date_actual: str | None = None
+    for year, month, day in dates:
+        if not comparable_dates:
+            continue
+        if any(_date_matches(year, month, day, rd) for _f, rd in comparable_dates):
+            date_matched = True
+        elif date_claimed is None:
+            date_claimed = _fmt_date(year, month, day)
+            date_actual = comparable_dates[0][1].isoformat()
+
+    if numeric_claimed is not None:
+        return ClaimStatus.STRIPPED_NUMERIC_MISMATCH, NumericFinding(
+            check=NumericCheck.MISMATCH,
+            claimed=numeric_claimed,
+            actual=numeric_actual,
+            resource_date_unknown=resource_date_unknown,
+        )
+    if date_claimed is not None:
+        return ClaimStatus.STRIPPED_DATE_MISMATCH, NumericFinding(
+            check=NumericCheck.MISMATCH,
+            claimed=date_claimed,
+            actual=date_actual,
+            resource_date_unknown=resource_date_unknown,
+        )
+    if numeric_matched or date_matched:
+        return None, NumericFinding(
+            check=NumericCheck.CHECKED,
+            unit_checked=numeric_unit_checked,
+            resource_date_unknown=resource_date_unknown,
+        )
+    return None, NumericFinding(
+        check=NumericCheck.UNCHECKED,
+        resource_date_unknown=resource_date_unknown,
+    )
+
+
+_CONTENT_STRIP_REASONS: dict[ClaimStatus, str] = {
+    ClaimStatus.STRIPPED_NUMERIC_MISMATCH: (
+        "claimed numeric value {claimed} does not match the cited resource "
+        "value {actual}"
+    ),
+    ClaimStatus.STRIPPED_DATE_MISMATCH: (
+        "claimed date {claimed} does not match the cited resource date {actual}"
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -529,11 +873,20 @@ _STRIP_REASONS: dict[ClaimStatus, str] = {
 def verify_response(
     draft: str,
     refs: Iterable[ResourceRef],
+    *,
+    resources: Iterable[ResourceFacts] | None = None,
 ) -> VerificationVerdict:
     """Verify a draft against the refs this request's tool calls returned.
 
     Pure and deterministic: no I/O, no clock, no network, no LLM. See the module
     docstring for the classification and fail-closed rules.
+
+    ``resources`` (T009) supplies the cited resources' structured fields for the
+    Layer-1 content check: a grounding-verified claim whose parseable numeric or
+    date contradicts the resource it cites is stripped
+    (``stripped_numeric_mismatch``/``stripped_date_mismatch``). With
+    ``resources=None`` the content check does not run — every grounding-verified
+    claim is ``numeric: unchecked`` and behavior is identical to T008.
     """
     available_refs = tuple(refs)
     by_type_id = {
@@ -543,11 +896,18 @@ def verify_response(
     for r in available_refs:
         by_id.setdefault(r.resource_id, set()).add(r.resource_type.value)
 
+    facts_by_key: dict[tuple[str, str], ResourceFacts] = {}
+    if resources is not None:
+        for fact in resources:
+            facts_by_key[(fact.ref.resource_type.value, fact.ref.resource_id)] = fact
+
     verdicts: list[ClaimVerdict] = []
     stripped: list[StrippedClaim] = []
     kept_sentences: list[str] = []
     passed = 0
     stripped_count = 0
+    numeric_checked = 0
+    numeric_unchecked = 0
 
     for sentence in _segment(draft):
         has_citation = _CITATION_RE.search(sentence) is not None
@@ -580,13 +940,56 @@ def verify_response(
 
         status, matched_ref = _classify_claim(sentence, by_type_id, by_id)
         if status is ClaimStatus.VERIFIED:
-            verdicts.append(
-                ClaimVerdict(
-                    status=status, text=sentence, ref=matched_ref
+            # Grounding passed. Run the T009 content check when resources were
+            # supplied; with resources=None the claim is numeric: unchecked.
+            if resources is None:
+                finding = NumericFinding(check=NumericCheck.UNCHECKED)
+                content_status: ClaimStatus | None = None
+            else:
+                cited_facts = [
+                    facts_by_key[key]
+                    for key in {
+                        (t, i) for t, i in _CITATION_RE.findall(sentence)
+                    }
+                    if key in facts_by_key
+                ]
+                content_status, finding = _content_check(sentence, cited_facts)
+
+            if content_status is None:
+                verdicts.append(
+                    ClaimVerdict(
+                        status=status,
+                        text=sentence,
+                        ref=matched_ref,
+                        numeric=finding,
+                    )
                 )
-            )
-            kept_sentences.append(sentence)
-            passed += 1
+                kept_sentences.append(sentence)
+                passed += 1
+                if finding.check is NumericCheck.CHECKED:
+                    numeric_checked += 1
+                else:
+                    numeric_unchecked += 1
+            else:
+                # Grounded citation, contradicting content: strip via the same
+                # annotate path, with a distinct numeric/date-mismatch status.
+                reason = _CONTENT_STRIP_REASONS[content_status].format(
+                    claimed=finding.claimed, actual=finding.actual
+                )
+                verdicts.append(
+                    ClaimVerdict(
+                        status=content_status,
+                        text=sentence,
+                        reason=reason,
+                        numeric=finding,
+                    )
+                )
+                stripped.append(
+                    StrippedClaim(
+                        text=sentence, reason=reason, status=content_status
+                    )
+                )
+                stripped_count += 1
         else:
             reason = _STRIP_REASONS[status]
             verdicts.append(
@@ -601,6 +1004,8 @@ def verify_response(
         claims_total=passed + stripped_count,
         claims_passed=passed,
         claims_stripped=stripped_count,
+        numeric_checked=numeric_checked,
+        numeric_unchecked=numeric_unchecked,
     )
     content_removed = stripped_count > 0
     # Fail closed only when no claim-bearing sentence survived AND something was

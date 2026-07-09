@@ -49,6 +49,9 @@ from copilot.contracts.tools import (
 from copilot.contracts.verification import (
     ClaimStatus,
     ClaimVerdict,
+    NumericCheck,
+    NumericFinding,
+    ResourceFacts,
     StrippedClaim,
     VerificationCounts,
     VerificationVerdict,
@@ -57,6 +60,9 @@ from copilot.contracts.verification import (
 __all__ = [
     "ClaimStatus",
     "ClaimVerdict",
+    "NumericCheck",
+    "NumericFinding",
+    "ResourceFacts",
     "StrippedClaim",
     "VerificationCounts",
     "VerificationVerdict",
