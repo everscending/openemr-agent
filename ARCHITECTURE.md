@@ -103,11 +103,12 @@ citations, numerics, and clinical-rule flags → response streams to the panel
 
 | Component | Description | Codebase anchors |
 |---|---|---|
-| **Chart panel** | Custom module `oe-module-clinical-copilot` (`openemr.bootstrap.php` entry point), embedded in the patient summary via the sanctioned card-render event (no core edits) — the same hook the shipped `oe-module-dashboard-context` uses. Chat UI, streaming rendering, citation deep-links to source records. | `src/Events/Patient/Summary/Card/RenderEvent.php`, `src/Core/ModulesApplication.php`, `interface/patient_file/summary/`, `src/Common/Session/PatientSessionUtil.php` |
+| **Chart panel** | Custom module `oe-module-clinical-copilot` (`openemr.bootstrap.php` entry point), embedded in the patient summary via the sanctioned card-render event (no core edits) — the same hook the shipped `oe-module-dashboard-context` uses. Chat UI, streaming rendering, citation chips + evidence cards with open-in-chart links (§5 Layer 3). | `src/Events/Patient/Summary/Card/RenderEvent.php`, `src/Core/ModulesApplication.php`, `interface/patient_file/summary/`, `src/Common/Session/PatientSessionUtil.php` |
 | **Token handoff** | Panel obtains a SMART-on-FHIR token from OpenEMR's OAuth2 server, scoped to the logged-in user and the open patient. Short-lived; per-conversation. | `src/RestControllers/AuthorizationController.php`, `src/RestControllers/SMART/ScopePermissionParser.php` |
 | **Agent service** | Python/FastAPI. Minimal explicit tool-use loop (no heavy multi-agent framework — single agent, small tool set; multi-agent adds coordination failure modes no use case requires). Pydantic schemas are the contract for every tool input/output — contracts are the source of truth, not the implementation. Correlation-ID middleware. OpenTelemetry instrumentation (vendor-neutral; §7). `/health` (process alive) and `/ready` (OpenEMR FHIR, LLM provider, trace backend reachable — real checks, not unconditional 200s). | new code, `agent/` |
 | **Tools (read-only)** | `get_patient_snapshot` — parallel fan-out fetching demographics, active meds, problems, allergies, recent labs, last encounter in one step (UC-1). Targeted tools: `search_observations`, `get_medication_history`, `get_encounters_since`, `search_documents`, `get_immunizations` (UC-2/3/4). All are FHIR API calls with the user's token; none writes. | `src/Services/FHIR/Fhir*Service.php` (Patient, MedicationRequest, Condition, AllergyIntolerance, Observation, Encounter, DocumentReference) |
 | **Verification layer** | See §5. | `src/ClinicalDecisionRules/Interface/`, `src/Services/DrugService.php` |
+| **Citation resolver** | Module-side endpoint (PHP, inside the co-pilot module) that maps a verified citation's FHIR uuid to its native chart location: `uuid_registry` → source table → row (native id, pid, encounter) → destination page per the §5 routing table. Returns a navigation descriptor (target URL + params + open mode) that the panel executes via the tab-framework JS. Read-only; runs in the user's session, so ACL applies to the lookup like any other read. | `src/Common/Uuid/UuidRegistry.php`, `src/Common/Uuid/UuidMapping.php`, `interface/main/tabs/js/tabs_view_model.js` |
 | **Audit + observability** | See §7. | `src/Common/Logging/EventAuditLogger.php`, `AuditConfig.php` |
 
 ## 3. Where the Agent Lives
@@ -134,7 +135,14 @@ Three trust boundaries, each with an explicit enforcement mechanism:
    `session_regenerate_id`. Both let a hostile page or fixed session reach PHI
    from the browser — the exact surface the panel adds. Remediation is an
    origin allowlist + session rotation; until then the panel is a same-origin
-   module, not a cross-origin app.
+   module, not a cross-origin app. Two further findings weaken what that
+   session *proves* and join the hardening list (AUDIT.md H2, §1 positives
+   note): MFA is enforced only by the landing page, never by the session
+   guard (`authCheckSession()` re-checks credentials, not MFA completion),
+   and the core session cookie ships JS-readable with `cookie_secure` off
+   (`SessionConfigurationBuilder::forCore()`) — so any XSS in the EMR yields
+   the very session the panel mints SMART tokens from. Both matter more, not
+   less, once the panel adds JS surface to the chart.
 2. **Agent service ↔ OpenEMR:** OAuth per request. The agent service holds no
    standing credentials — no DB connection, no service account with broad
    read. Every FHIR call presents the requesting user's token, so OpenEMR's
@@ -170,7 +178,14 @@ exceptions + break-glass — is roadmap (§11), not v1.
 
 ## 5. Verification Strategy
 
-Trust is the product; this layer is designed before the agent loop, not after.
+Trust is the product. Layer 1 below runs as a post-generation filter — it
+checks the LLM's output after the fact — but a filter can only check what it's
+given something to check against. That's why the tool layer (§2) returns
+structured resources with stable IDs, and the system prompt requires a
+`[ResourceType/id]` citation on every claim: both were co-designed with the
+agent loop specifically so this filter would have IDs to verify and tokens to
+parse. Bolting verification onto an agent loop built without those affordances
+would leave nothing deterministic to check against.
 
 **Layer 1 — Source attribution (hot path, deterministic).**
 - Tools return structured FHIR resources; every resource carries its ID.
@@ -190,8 +205,66 @@ Trust is the product; this layer is designed before the agent loop, not after.
   checking and clinical decision rules (`DrugService`, CDR engine); flags are
   attached to the response, attributed to the EMR's CDS rather than the
   agent's judgment.
+- Known dependency, stated (AUDIT.md D3): interaction checking is only as
+  strong as the medication coding beneath it, and the audit found almost
+  none — `rxnorm_drugcode=NULL`, free-text titles, empty `drugs` tables. An
+  uncoded medication therefore yields an explicit "interaction check
+  unavailable — uncoded entry" flag, never a silent clean pass; requiring
+  coded entries is roadmap (§11.6).
 
-**What this deliberately does not catch (and where that lives instead):**
+**Layer 3 — Citation presentation (panel-side; show the proof, then link to
+it).** The `[ResourceType/id]` token is the machine layer — it exists for the
+Layer-1 verifier, not the physician; a raw uuid is unreadable and
+un-actionable in a 90-second window. After verification, the panel replaces
+each token with a three-tier UI:
+
+- **Chip (always visible):** type icon + human identifier + date, rendered
+  from the cited resource — `A1c 8.2% · 2026-05-14 · LabCorp`,
+  `℞ lisinopril 20mg · started 2025-01`. Answers "where did that come from?"
+  with zero clicks; record age is itself clinical signal (a 14-month-old A1c
+  reads very differently from last week's).
+- **Evidence card (hover/tap; no navigation):** the resource fields the claim
+  rests on — value, units, reference range, status, dates — rendered directly
+  from the tool result the agent already holds. Because the card renders from
+  *data*, not model output, it survives model misstatement: even if the
+  summary says "improving" of a worsening trend, the card shows the true
+  numbers — a human check on exactly the entailment gap the hot path cannot
+  close (below). Derived claims (trends, counts) list every contributing
+  resource. **Absence claims** ("no colonoscopy on record") have no resource
+  to cite — the chip carries a *query receipt* instead: what was searched,
+  the scope, zero results, and the timestamp. Without this, a citation UX
+  built only on resource IDs has nothing to show for the data-quality
+  boundary cases in §8 ("no allergies **recorded**").
+- **Open in chart (button on the card):** navigates to the native record via
+  the citation resolver (§2).
+
+Resolver mechanics: `UuidRegistry::getRegistryRecordForUuid()` maps uuid →
+source table (`UUID_TABLE_DEFINITIONS`, `src/Common/Uuid/UuidRegistry.php:39`);
+a row lookup on that table recovers the native id, owning `pid`, and (where
+present) `encounter`; derived resources with no row of their own (e.g.
+vitals-derived Observations) indirect through the `uuid_mapping` table
+(`src/Common/Uuid/UuidMapping.php`) to their parent first. Routing table —
+where each resource type lands and how it opens:
+
+| FHIR resource | Source table | Chart destination | Open mode |
+|---|---|---|---|
+| Encounter | `form_encounter` | `demographics.php?set_pid&set_encounterid` → encounter tab | tab navigation |
+| Condition / AllergyIntolerance | `lists` | `add_edit_issue.php?issue=<id>` | dialog (context preserved) |
+| Observation / DiagnosticReport | `procedure_result` → parent `procedure_order` | `single_order_results.php?orderid=<id>` | dialog |
+| DocumentReference | `documents` | `controller.php?document&view&doc_id&patient_id` | dialog |
+| MedicationRequest | `prescriptions` | no per-row page exists in OpenEMR | scroll-to + highlight in the summary medications card |
+| Immunization | `immunizations` | summary immunizations card | scroll-to + highlight |
+
+Two OpenEMR constraints shape the open-mode column. First, there are no
+bookmarkable deep links: `main.php` rejects foreign query params (single-use
+session token) and inner chart pages read pid/encounter from the *session*,
+not the URL — so citation links are in-app JS navigations
+(`top.RTop.location`, `dlgopen`, `left_nav.loadFrame`), available to the
+embedded panel and to nothing outside it. Second, tab navigation mutates the
+active pid/encounter session state and replaces the physician's current view;
+mid-pre-review that costs more than the citation is worth, so destinations
+open as dialogs wherever OpenEMR supports it, and full tab navigation is
+reserved for the targets that genuinely need native context (encounters).
 citation-existence verifies **grounding, not entailment** — the model could
 cite a real lab while misstating its direction ("improving" vs. worsening).
 Directional/semantic errors beyond parseable numerics are measured by an
@@ -204,7 +277,11 @@ class because it is the one the hot path cannot fully catch.
 
 Latency budget (targets pending load testing — stated as design targets, not
 measurements): **first token < 3s; complete snapshot < 10s; follow-ups < 5s;
-p95 < 15s.**
+p95 < 15s.** Validation is specified, not vague: load tests at 10 and 50
+concurrent users record p50/p95/p99 latency and error rate at each level, and
+baseline CPU/memory/latency/throughput profiles of both services are captured
+under the same scenarios and checked into the repo as the reference against
+which future performance changes are measured.
 
 Design levers:
 - **One snapshot tool, parallel fan-out** (UC-1): the default question costs
@@ -232,7 +309,12 @@ an early performance task, not a scale-tier concern; (b) labs are the slowest
 resource because `procedure_result` has no patient index (`sql/database.sql:10493`,
 a 3-table join to reach `pid`), so the snapshot fetches labs on its own timeout
 and degrades gracefully if they lag; (c) the snapshot path must **not** request
-`_revinclude=provenance` — it builds provenance per record, doubling row work.
+`_revinclude=provenance` — it builds provenance per record, doubling row work;
+(d) encounter content lives in an EAV forms system — the `forms` registry
+fans out to 38 `form_*` tables at one query per row (AUDIT.md P3) — so
+`get_encounters_since` returns encounter metadata and notes in bounded
+batches rather than assembling full form content, which stays behind an
+explicit follow-up (UC-2) instead of inflating the interval-diff path.
 
 ## 7. Failure Modes, Audit, and Observability
 
@@ -284,6 +366,15 @@ bridge adds the missing **decision/disclosure log**.
   keeps the backend swappable (see Observability below). The bridge failure
   raises an alert. Fail-closed applies to verification; audit delivery is
   fail-open-with-alarm.
+- *Retention & disposal (AUDIT.md CR5, CR6):* the platform has no retention
+  policy to inherit, so the agent defines its own. Conversation state is
+  ephemeral — a TTL of hours, never persisted beyond the session. The
+  decision/disclosure rows ride the EMR audit trail and its six-year HIPAA
+  accounting horizon, and service logs (PHI-free pointers) are retained to
+  the same horizon since together they are the sole durable record. Any
+  at-rest storage of prompts or payloads reuses OpenEMR's `CryptoGen`
+  primitives — the audit's strongest positive. Provider-side retention is
+  contractually zero under the BAA's no-training/no-retention terms.
 
 **Observability (LangSmith, BAA-covered — instrumented for portability):**
 every step of every request is traced — tool calls with timings, LLM calls
@@ -309,11 +400,23 @@ change plus one adapter file — the "adapter swap, not a re-architecture"
 claim in §9 is engineered here, not asserted.
 
 **Dashboard & alerts:** real-time dashboard of request count, error rate,
-p50/p95 latency, tool-call and retry counts, token cost, and verification
-pass/fail rate. Alerts: p95 latency > 15s (degraded UX — investigate
-tool/LLM latency); error rate > 5% over 10 min (page — check `/ready`
-dependencies); tool failure rate > 10% (OpenEMR FHIR layer or auth problem;
-verify token issuance). Each alert documents its on-call response.
+p50/p95 latency, tool-call and retry counts, in-flight request depth (the
+queue-depth signal; a literal queue arrives with request queueing at the 10K
+tier, §10), token cost, and verification pass/fail rate. Alerts: p95 latency
+> 15s (degraded UX — investigate tool/LLM latency); error rate > 5% over
+10 min (page — check `/ready` dependencies); tool failure rate > 10%
+(OpenEMR FHIR layer or auth problem; verify token issuance); cross-patient
+access anomaly — one user's invocations spanning an unusual number of
+distinct patients in an hour (flag for access review). That last one is not
+optional garnish: §4 leans on detection as the compensating control for the
+missing panel scoping, and the audit found the platform has no anomaly
+detection of its own (AUDIT.md CR4) — so this channel ships its own detector.
+Each alert documents its on-call response.
+
+**Runnable API collection:** a Bruno collection, versioned in the repo like
+the eval fixtures, covers `/chat`, `/health`, `/ready`, and the module's
+citation-resolver and audit-bridge endpoints — every core workflow
+exercisable without reading source.
 
 ## 8. Evaluation Plan
 
@@ -399,7 +502,8 @@ whose gaps are documented:
 3. **Prompt-injection residual** (§4): emphasis-biasing by adversarial
    document content is mitigated, not eliminated.
 4. **Latency targets are unvalidated** until load testing (10/50 concurrent
-   users) lands in the early submission.
+   users, p50/p95/p99 + error rate, with baseline resource profiles — §6)
+   lands in the early submission.
 5. **Single persona** (USER.md §1): nurses, residents, and rounding
    workflows are explicitly deferred; the inherited-authorization design is
    what makes adding them safe later.
@@ -411,7 +515,17 @@ whose gaps are documented:
    **reconcile `prescriptions` + `lists` and flag conflicts**, not read a
    single table. Roadmap: a medication-reconciliation tool and requiring coded
    (RxNorm/SNOMED) entries.
-7. **Two platform security fixes are prerequisites, not agent features**
-   (AUDIT.md C2, H1): the reflected-origin CORS policy and missing session
-   regeneration must be remediated before the browser panel is exposed
-   cross-origin. Tracked as hardening tasks the agent work depends on.
+7. **Platform security fixes are prerequisites, not agent features**
+   (AUDIT.md C2, H1, H2): the reflected-origin CORS policy, missing session
+   regeneration, and MFA's absence from the session guard must be remediated
+   before the browser panel is exposed cross-origin; the JS-readable session
+   cookie and off-by-default `cookie_secure` are hardened with them (§4).
+   Tracked as hardening tasks the agent work depends on.
+8. **Citation deep-link coverage is uneven, by OpenEMR's own geography**
+   (§5 routing table): there is no per-prescription page, and lab/issue
+   destinations are dialogs rather than chart tabs. The routing table makes
+   coverage enumerable — "which citation types are clickable" is a checklist,
+   not a claim — and unsupported types degrade to scroll-and-highlight in the
+   summary, never a dead link. The evidence card, which needs no navigation
+   at all, is the primary verification surface precisely so these gaps stay
+   cosmetic.

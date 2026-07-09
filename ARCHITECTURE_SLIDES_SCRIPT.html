@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clinical Co-Pilot — Speaker Script</title>
+<style>
+  :root {
+    --paper: #F4F7F6; --panel: #FFFFFF; --panel-2: #EAF0EE;
+    --ink: #16302C; --muted: #5A716C; --faint: #8CA09B; --line: #C9D6D2;
+    --accent: #0F8577; --accent-ink: #0B6459; --accent-soft: rgba(15,133,119,0.10);
+    --warn: #B97F1F;
+    --display: "Futura", "Futura PT", "Trebuchet MS", "Avenir Next", system-ui, sans-serif;
+    --body: "Avenir Next", "Avenir", "Seravek", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", "Menlo", "Cascadia Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0B1514; --panel: #101D1B; --panel-2: #152523;
+      --ink: #DCE8E5; --muted: #93A9A4; --faint: #63807A; --line: #24403C;
+      --accent: #41C0AF; --accent-ink: #63D2C3; --accent-soft: rgba(65,192,175,0.13);
+      --warn: #D9A441;
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #F4F7F6; --panel: #FFFFFF; --panel-2: #EAF0EE;
+    --ink: #16302C; --muted: #5A716C; --faint: #8CA09B; --line: #C9D6D2;
+    --accent: #0F8577; --accent-ink: #0B6459; --accent-soft: rgba(15,133,119,0.10);
+    --warn: #B97F1F;
+  }
+  :root[data-theme="dark"] {
+    --paper: #0B1514; --panel: #101D1B; --panel-2: #152523;
+    --ink: #DCE8E5; --muted: #93A9A4; --faint: #63807A; --line: #24403C;
+    --accent: #41C0AF; --accent-ink: #63D2C3; --accent-soft: rgba(65,192,175,0.13);
+    --warn: #D9A441;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--body); font-size: 17px; line-height: 1.65;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 3rem 1.5rem 5rem; }
+  header { margin-bottom: 2.5rem; }
+  .eyebrow {
+    font-family: var(--display); font-weight: 600; font-size: .74rem;
+    letter-spacing: .2em; text-transform: uppercase; color: var(--accent-ink);
+    margin: 0 0 .5rem;
+  }
+  h1 { font-family: var(--display); font-size: 2.1rem; line-height: 1.1; margin: 0 0 .6rem; }
+  header p { color: var(--muted); margin: 0; }
+  code {
+    font-family: var(--mono); font-size: .88em; color: var(--muted);
+    background: var(--panel-2); border-radius: 4px; padding: .05em .35em;
+  }
+  .toc {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 1rem 1.3rem; margin: 1.6rem 0 0; font-size: .9rem;
+    columns: 2; column-gap: 2rem;
+  }
+  .toc a { color: var(--muted); text-decoration: none; display: block; padding: .12rem 0; }
+  .toc a:hover { color: var(--accent-ink); }
+  .toc .n { font-family: var(--mono); color: var(--faint); font-size: .8em; margin-right: .45em; }
+  @media (max-width: 560px) { .toc { columns: 1; } }
+
+  section.cue {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 1.4rem 1.6rem; margin: 1.4rem 0;
+  }
+  .cue-head { display: flex; align-items: baseline; gap: .8rem; margin-bottom: .3rem; }
+  .cue-head .n {
+    font-family: var(--mono); font-size: .8rem; color: var(--accent-ink);
+    background: var(--accent-soft); border-radius: 6px; padding: .15em .5em;
+    white-space: nowrap;
+  }
+  h2 { font-family: var(--display); font-size: 1.25rem; margin: 0; }
+  .time { margin-left: auto; font-family: var(--mono); font-size: .75rem; color: var(--faint); white-space: nowrap; }
+  .onslide { font-size: .82rem; color: var(--faint); margin: 0 0 .8rem; }
+  .say p { margin: 0 0 .85rem; }
+  .say p:last-child { margin-bottom: 0; }
+  .say strong { color: var(--accent-ink); }
+  .beat {
+    border-left: 3px solid var(--warn); background: var(--panel-2);
+    border-radius: 0 8px 8px 0; padding: .5rem .9rem; margin: .9rem 0 0;
+    font-size: .88rem; color: var(--muted);
+  }
+  .beat b { color: var(--ink); font-family: var(--display); font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; margin-right: .4em; }
+  footer { margin-top: 3rem; color: var(--faint); font-size: .85rem; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Companion to ARCHITECTURE_SLIDES.html</p>
+  <h1>Clinical Co-Pilot — Speaker Script</h1>
+  <p>Sixteen slides, roughly fourteen minutes at a conversational pace. Each cue below gives the words for one slide; the “anticipate” notes flag the question that slide tends to draw.</p>
+  <nav class="toc">
+    <a href="#s1"><span class="n">01</span>Title</a>
+    <a href="#s2"><span class="n">02</span>The moment</a>
+    <a href="#s3"><span class="n">03</span>The shape</a>
+    <a href="#s4"><span class="n">04</span>Authorization</a>
+    <a href="#s5"><span class="n">05</span>Read-only</a>
+    <a href="#s6"><span class="n">06</span>Verification</a>
+    <a href="#s7"><span class="n">07</span>Speed</a>
+    <a href="#s8"><span class="n">08</span>What the audit changed</a>
+    <a href="#s9"><span class="n">09</span>Failure modes</a>
+    <a href="#s10"><span class="n">10</span>Audit trail</a>
+    <a href="#s11"><span class="n">11</span>Portability</a>
+    <a href="#s12"><span class="n">12</span>Evaluation</a>
+    <a href="#s13"><span class="n">13</span>Decisions</a>
+    <a href="#s14"><span class="n">14</span>Scale</a>
+    <a href="#s15"><span class="n">15</span>Known limits</a>
+    <a href="#s16"><span class="n">16</span>Close</a>
+  </nav>
+</header>
+
+<section class="cue" id="s1">
+  <div class="cue-head"><span class="n">Slide 01</span><h2>Title</h2><span class="time">~30s</span></div>
+  <p class="onslide">On slide: three boxes — chart panel → agent service → FHIR API.</p>
+  <div class="say">
+    <p>This is the Clinical Co-Pilot: a conversational agent that lives inside the patient chart in our OpenEMR fork. It exists to answer one question — <strong>“what do I need to know about this patient right now?”</strong> — in seconds, and with every clinical claim cited to a specific record.</p>
+    <p>The three boxes on screen are the whole story in miniature: a panel in the chart asks, a separate agent service thinks and verifies, and the EMR itself decides what data anyone gets to see. The next fifteen slides unpack why each of those boundaries sits where it does.</p>
+  </div>
+</section>
+
+<section class="cue" id="s2">
+  <div class="cue-head"><span class="n">Slide 02</span><h2>The moment</h2><span class="time">~40s</span></div>
+  <p class="onslide">On slide: 90-second timeline between patients; question in, cited answer out.</p>
+  <div class="say">
+    <p>Everything in this architecture is shaped by one workflow moment: a primary care physician doing pre-visit review, in the roughly ninety seconds between one patient leaving and the next walking in. The chart is already open.</p>
+    <p>That window disqualifies a lot of designs up front. A separate app with its own login is dead on arrival — the context switch alone eats the window. So the co-pilot is embedded where the physician already is, and the entire latency and trust budget is spent on answering fast and answering <strong>verifiably</strong>.</p>
+  </div>
+</section>
+
+<section class="cue" id="s3">
+  <div class="cue-head"><span class="n">Slide 03</span><h2>The shape</h2><span class="time">~60s</span></div>
+  <p class="onslide">On slide: OpenEMR boundary (panel, OAuth, FHIR+ACL, audit log) beside the Python agent service (loop, tools, verification), with LLM and traces outside.</p>
+  <div class="say">
+    <p>The system is two pieces. On the left, a <strong>thin custom module</strong> inside OpenEMR — it uses the sanctioned card-render hook the shipped dashboard module already uses, so there are no core edits. It draws the chat panel and inherits the logged-in session. On the right, a <strong>separate Python service</strong> built on FastAPI: the LLM orchestration loop, a small registry of read-only tools, and a verification layer, with real health and readiness endpoints.</p>
+    <p>I explicitly rejected running the agent in-process in PHP, for three reasons: PHP’s agent and observability ecosystem is weak; long LLM calls would pin Apache workers; and a separate service scales independently and gives me a clean trust boundary I can point at.</p>
+  </div>
+  <p class="beat"><b>Anticipate</b> “Why not a framework like LangGraph?” — held for slide 13; short answer: one agent and six tools don’t need one.</p>
+</section>
+
+<section class="cue" id="s4">
+  <div class="cue-head"><span class="n">Slide 04</span><h2>Authorization</h2><span class="time">~60s</span></div>
+  <p class="onslide">On slide: physician → SMART token (user + patient) → agent → EMR decides; direct-SQL path struck out.</p>
+  <div class="say">
+    <p>The most important design decision: the agent has <strong>no authority of its own</strong>. When the panel starts a conversation it hands the service a SMART-on-FHIR token bound to two things — the logged-in user and the currently open patient. Every single read the agent makes presents that token to OpenEMR’s FHIR API, so the EMR’s existing ACL engine and OAuth scope enforcement make every access decision. A nurse’s token sees exactly what a nurse sees.</p>
+    <p>The agent holds no database credentials and no service account. And it’s patient-context-bound: it can only be invoked from an open chart, and only queries that patient.</p>
+    <p>One limitation stated up front: OpenEMR’s ACL is role-based, not panel-based — any role with chart access can open any chart. The agent inherits exactly that boundary. It doesn’t widen the aperture, and it doesn’t narrow it either. We’ll come back to that on the limits slide.</p>
+  </div>
+</section>
+
+<section class="cue" id="s5">
+  <div class="cue-head"><span class="n">Slide 05</span><h2>Read-only</h2><span class="time">~45s</span></div>
+  <p class="onslide">On slide: the six read-only tools feeding the chart; a write tool crossed out.</p>
+  <div class="say">
+    <p>Version one has <strong>zero write access</strong> to the EMR. The reasoning is blunt: a read-only agent can produce a bad summary; a writing agent can corrupt a chart. Those are different classes of harm, and we only accept the first.</p>
+    <p>Read-only also collapses most of the prompt-injection problem. Chart content — notes, scanned documents — is treated as untrusted input, because a document could contain adversarial text. But injected instructions have <strong>no write tools to escalate into</strong>. The worst an injection can do is bias what a summary emphasizes, and that residual risk is tested with adversarial documents in the eval suite rather than claimed solved.</p>
+  </div>
+</section>
+
+<section class="cue" id="s6">
+  <div class="cue-head"><span class="n">Slide 06</span><h2>Verification</h2><span class="time">~85s</span></div>
+  <p class="onslide">On slide: pipeline from tool results → cited draft → deterministic checker → ship or fail closed; two cards splitting grounding from entailment.</p>
+  <div class="say">
+    <p>Trust is the product, so the verification layer was designed before the agent loop, not bolted on after. It works like this: tools return structured FHIR resources, and every resource carries its ID. The system prompt requires a citation on every clinical claim. Then a post-processor — <strong>not an LLM, ordinary deterministic code</strong> — checks that every cited ID actually appeared in this request’s tool results. It costs milliseconds and it cannot itself hallucinate. Where a claim contains a parseable number, value, unit, or date, that’s also compared against the cited resource’s fields.</p>
+    <p>Failures <strong>fail closed</strong>: a claim citing an unknown ID is stripped and the response annotated; if stripping guts the response, the user gets “couldn’t verify — view source records” with deep links instead. Medication answers additionally run through OpenEMR’s own drug-interaction and clinical-decision rules, with flags attributed to the EMR’s CDS, not the agent’s judgment. One dependency stated plainly: those checks are only as strong as the medication coding beneath them, and the audit found mostly uncoded free-text meds — so an uncoded medication is flagged <strong>“interaction check unavailable,”</strong> never silently passed as clean.</p>
+    <p>And here’s the honest boundary: this verifies <strong>grounding, not entailment</strong>. The model could cite a real lab and misstate its direction. Catching that in-path would mean an LLM judge on every request — roughly doubling latency and adding a second model to trust — so semantic checking lives in the offline eval suite, which is weighted toward exactly this failure class. I can state precisely what the verifier catches and what it does not.</p>
+  </div>
+</section>
+
+<section class="cue" id="s7">
+  <div class="cue-head"><span class="n">Slide 07</span><h2>Speed</h2><span class="time">~50s</span></div>
+  <p class="onslide">On slide: snapshot fan-out to six fetches; latency target bars (3 / 5 / 10 / 15 seconds).</p>
+  <div class="say">
+    <p>The default question is served by a single tool, <code>get_patient_snapshot</code>, which fans out in parallel to demographics, meds, problems, allergies, recent labs, and the last encounter — so the common case costs <strong>one agent step</strong>, not five sequential tool calls. Deeper questions trigger targeted tools on demand; we don’t exhaustively mine the chart up front.</p>
+    <p>The targets: first token under three seconds, complete snapshot under ten, follow-ups under five, p95 under fifteen. I want to be careful here — these are <strong>design targets pending load testing</strong>, not measurements. Streaming means reading starts before generation ends, and a cheaper model tier handles routing while a stronger tier writes the synthesis. The tradeoff is explicit: fast-and-explicit beats slow-and-complete — partial results always say what’s missing.</p>
+  </div>
+</section>
+
+<section class="cue" id="s8">
+  <div class="cue-head"><span class="n">Slide 08</span><h2>What the audit changed</h2><span class="time">~65s</span></div>
+  <p class="onslide">On slide: six request lanes each paying a “reload ~500 globals” tax; the promoted fix and two consequences.</p>
+  <div class="say">
+    <p>This slide is where reading the actual codebase changed the plan. The latency floor is <strong>not</strong> the FHIR queries — that layer is single-query, not N-plus-one. It’s OpenEMR’s per-request bootstrap: <code>globals.php</code> reloads about five hundred settings from the database on <strong>every</strong> request. So my six-way parallel fan-out pays that hundred-to-three-hundred-millisecond tax six times, with zero reuse. Parallelism helps wall-clock time but does nothing about that fixed cost.</p>
+    <p>Four consequences. A bootstrap short-circuit for token-authenticated FHIR requests is the highest-leverage optimization, so it’s promoted to an early task, not deferred to some scale tier. Labs are the slowest resource — the results table has no patient index, it’s a three-table join to reach the patient — so labs get their own timeout and degrade gracefully. The snapshot never requests provenance inlined, because that doubles row work. And encounter content lives in a table-per-form design where assembly costs one query per form — so the interval-change tool returns encounter metadata and notes in bounded batches, keeping full content behind an explicit follow-up.</p>
+  </div>
+</section>
+
+<section class="cue" id="s9">
+  <div class="cue-head"><span class="n">Slide 09</span><h2>Failure modes</h2><span class="time">~55s</span></div>
+  <p class="onslide">On slide: the invariant as a headline; four failure cards.</p>
+  <div class="say">
+    <p>One invariant governs every failure mode: <strong>the physician always knows what the agent did not check</strong>. A summary that omits a section must be distinguishable from a summary that verified the section is empty.</p>
+    <p>So: if the labs fetch fails, the answer ships with the remaining data and an explicit banner — “labs unavailable; this covers meds, problems, allergies” — never a silently narrower summary. If the LLM provider is down or slow, the panel falls back to a plain structured snapshot rendered straight from FHIR data — you don’t need a model to show a med list. Verification failures fail closed, as we saw. And an empty record is stated affirmatively — “no encounters on file since 2023” — because absence of data is itself clinical information. Under all of it, every model output is schema-validated at every step: parse failure means one retry, then the fallback.</p>
+  </div>
+</section>
+
+<section class="cue" id="s10">
+  <div class="cue-head"><span class="n">Slide 10</span><h2>Audit trail</h2><span class="time">~80s</span></div>
+  <p class="onslide">On slide: access log and decision/disclosure log converging on the EMR audit log via the audit bridge; correlation-ID band.</p>
+  <div class="say">
+    <p>Accountability uses two mechanisms that land in one trail, joined by a correlation ID that appears on every log line, tool call, and trace.</p>
+    <p>The first mechanism is free: every tool call is just a FHIR request as the authenticated user, so OpenEMR’s existing audit machinery logs the data access natively — no new code. But that’s only an <strong>access</strong> log. It records that a token read a patient; it doesn’t record that an <em>AI</em> mediated the access, what was asked, what was answered, or whether verification passed. That’s the gap the second mechanism fills: the module exposes a small internal <strong>audit bridge</strong>, the agent service POSTs the invocation record, and the module writes it through the EMR’s own audit logger, in-process, with a custom event type.</p>
+    <p>One more thing the bridge records: sending patient data to the LLM is a HIPAA <strong>disclosure</strong> to a business associate, and OpenEMR already models that — so the bridge calls the existing disclosure-accounting hook, recording recipient, patient, and the minimum-necessary payload actually sent. If the audit POST itself fails, the response is not blocked — service logs plus the EMR row are the durable record — but an alert fires. Fail-closed is for verification; audit delivery is fail-open-with-alarm. And note what’s deliberately absent from this chain: the observability trace. SaaS trace retention is days to weeks; HIPAA’s accounting horizon is six years. Retention itself is defined rather than inherited, because the platform has no retention policy of its own: conversation state is ephemeral, the decision and disclosure records ride the EMR trail’s six-year horizon, and provider-side retention is <strong>contractually zero</strong> under the BAA’s no-training, no-retention terms.</p>
+  </div>
+</section>
+
+<section class="cue" id="s11">
+  <div class="cue-head"><span class="n">Slide 11</span><h2>Portability</h2><span class="time">~55s</span></div>
+  <p class="onslide">On slide: agent code → OTel exporter → LangSmith today, Braintrust and self-hosted Langfuse as plug-compatible alternates.</p>
+  <div class="say">
+    <p>We trace everything — tool timings, token counts and cost, verification verdicts — in LangSmith today. But portability is a design requirement, not an aspiration, enforced by three rules: agent code emits <strong>OpenTelemetry spans and never imports a vendor SDK</strong> — LangSmith is an exporter destination, configured, not coded against; the readiness check calls it “trace backend,” a dependency, not a product; and the trace carries no compliance role, so retention limits and migrations never touch the compliance story.</p>
+    <p>The consequence: moving to Braintrust or self-hosted Langfuse is an exporter-config change plus one adapter file. That “adapter swap, not re-architecture” claim is engineered here, not asserted. The same spans feed the dashboard and the four alerts — latency, error rate, tool failures, and a <strong>cross-patient access anomaly</strong> alert that gives the detective control from the authorization story an actual detector, since the audit found the platform has none of its own. Each alert documents its on-call response.</p>
+  </div>
+</section>
+
+<section class="cue" id="s12">
+  <div class="cue-head"><span class="n">Slide 12</span><h2>Evaluation</h2><span class="time">~60s</span></div>
+  <p class="onslide">On slide: invariant/boundary/data-quality cards; git-as-source-of-truth synced one-way to the platform.</p>
+  <div class="say">
+    <p>There is no happy-path-only suite: every eval case exercises a boundary, an invariant, or a regression. Invariants like “every claim carries a valid citation” and “dosing and diagnosis requests are refused.” Boundaries like empty records, injected documents, and questions about a different patient than the open chart.</p>
+    <p>The most interesting cases came from the data audit, and they’re real, not hypothetical. A patient with no allergy row must yield “no allergies <strong>recorded</strong>” — never “no allergies” — because empty and NULL are used interchangeably across the patient table. The demo’s own patient 2 has Lisinopril marked active in the prescriptions table and inactive in the problem list, so a test asserts the agent <strong>flags the conflict</strong> rather than silently picking a side. And zero-dates render as “unknown,” never fed to date math.</p>
+    <p>Structurally, the suite’s source of truth is the <strong>repo</strong>: cases are versioned fixtures reviewed in PRs and run in CI on every prompt or tool change. The platform is just the runner and history viewer — datasets sync one way, from git. That keeps the most accumulative, most vendor-sticky asset portable.</p>
+  </div>
+</section>
+
+<section class="cue" id="s13">
+  <div class="cue-head"><span class="n">Slide 13</span><h2>Decisions</h2><span class="time">~50s</span></div>
+  <p class="onslide">On slide: five chosen-versus-rejected rows.</p>
+  <div class="say">
+    <p>Five decisions, each with the road not taken. Claude, tiered fast-and-strong, over self-hosted open source — self-hosting removes the BAA question but its quality and ops cost isn’t justified in a one-week sprint with BAAs assumed. A minimal explicit tool-use loop over LangGraph or multi-agent — with one agent and six tools, a loop I can fully explain beats a framework I’d debug under deadline. FastAPI with Pydantic contracts on every tool boundary, so malformed data fails at the edge, not mid-conversation.</p>
+    <p>The one I’d defend hardest: <strong>FHIR with the user’s token over direct SQL</strong>. SQL would be faster and would bypass every enforcement layer — ACL, scopes, audit — moving authorization into my code. That’s the wrong trade in an EMR. The HTTP-hop cost is real, and it’s paid for by the parallel snapshot. And LangSmith over Braintrust: the BAA criterion tied — both gate it behind Enterprise — so tiebreakers decided, and slide 11 is what makes that choice cheap to revisit.</p>
+  </div>
+</section>
+
+<section class="cue" id="s14">
+  <div class="cue-head"><span class="n">Slide 14</span><h2>Scale</h2><span class="time">~45s</span></div>
+  <p class="onslide">On slide: staircase from 100 to 100K users; cost chips.</p>
+  <div class="say">
+    <p>Unit economics first: a snapshot is roughly five to fifteen thousand input tokens, call it <strong>two to ten cents per interaction</strong> — one to two dollars per physician per day. The interesting part is that each order of magnitude has one dominant problem. At a hundred users, the current shape holds. At a thousand, the service goes stateless behind a load balancer with conversation state in Redis — and the interface is already Redis-shaped, so that’s configuration, not redesign — while the FHIR layer becomes the bottleneck. At ten thousand, LLM rate limits dominate, and the lever is pre-computation: a morning batch over the day’s schedule turns interactive queries into warm cache hits. At a hundred thousand, it’s multi-region and per-tenant isolation, and cost becomes a caching architecture problem rather than a per-token one.</p>
+  </div>
+</section>
+
+<section class="cue" id="s15">
+  <div class="cue-head"><span class="n">Slide 15</span><h2>Known limits</h2><span class="time">~65s</span></div>
+  <p class="onslide">On slide: six limitation cards; the security-prerequisite card highlighted.</p>
+  <div class="say">
+    <p>I want to end with the gaps, because the defensible version of this system is the one whose gaps are documented. No panel-scoped authorization — inherited from OpenEMR; every agent invocation is separately audit-logged and the cross-patient anomaly alert from slide 11 watches for misuse, so detection is real rather than aspirational, and preventive panel scoping with break-glass is roadmap. Grounding is not entailment — the hot path can’t catch a cited-but-misstated claim, so we measure that rate offline and will only add an in-path check if the data justifies the latency. Injection can still bias emphasis. The latency numbers are unvalidated until load testing lands. It’s one persona — physicians; nurses and residents are deferred, and the inherited-authorization design is exactly what makes adding them safe later.</p>
+    <p>And the red card: three <strong>platform</strong> security fixes gate the browser panel — a reflected-origin CORS policy, missing session regeneration, and an MFA check the session guard never re-verifies, with session-cookie hardening riding along. These matter more, not less, once the panel adds JavaScript surface to the chart and mints tokens from that session. Until they’re remediated, the panel ships as a same-origin module only. They’re tracked as hardening prerequisites the agent work depends on, not agent features.</p>
+  </div>
+</section>
+
+<section class="cue" id="s16">
+  <div class="cue-head"><span class="n">Slide 16</span><h2>Close</h2><span class="time">~25s</span></div>
+  <p class="onslide">On slide: the invariant, full-screen.</p>
+  <div class="say">
+    <p>If you remember one sentence: the physician always knows what the agent did — and what it did <strong>not</strong> — check, and every claim points at a record. Everything else on these slides — read-only tools, inherited authorization, deterministic verification, honest failure banners, swappable vendors — exists to keep that sentence true. Happy to go deeper on any boundary.</p>
+  </div>
+</section>
+
+<footer>Sources: <code>ARCHITECTURE.md</code> · <code>AUDIT.md</code> · <code>USER.md</code> — slides: <code>ARCHITECTURE_SLIDES.html</code></footer>
+</div>
+</body>
+</html>

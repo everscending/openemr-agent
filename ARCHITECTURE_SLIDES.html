@@ -1,0 +1,850 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clinical Co-Pilot — Architecture in 16 Slides</title>
+<style>
+  :root {
+    --paper: #F4F7F6;
+    --panel: #FFFFFF;
+    --panel-2: #EAF0EE;
+    --ink: #16302C;
+    --muted: #5A716C;
+    --faint: #8CA09B;
+    --line: #C9D6D2;
+    --accent: #0F8577;
+    --accent-ink: #0B6459;
+    --accent-soft: rgba(15, 133, 119, 0.10);
+    --warn: #B97F1F;
+    --warn-soft: rgba(185, 127, 31, 0.12);
+    --crit: #A8402F;
+    --crit-soft: rgba(168, 64, 47, 0.10);
+    --display: "Futura", "Futura PT", "Trebuchet MS", "Avenir Next", system-ui, sans-serif;
+    --body: "Avenir Next", "Avenir", "Seravek", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", "Menlo", "Cascadia Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0B1514; --panel: #101D1B; --panel-2: #152523;
+      --ink: #DCE8E5; --muted: #93A9A4; --faint: #63807A; --line: #24403C;
+      --accent: #41C0AF; --accent-ink: #63D2C3; --accent-soft: rgba(65,192,175,0.13);
+      --warn: #D9A441; --warn-soft: rgba(217,164,65,0.14);
+      --crit: #D96C57; --crit-soft: rgba(217,108,87,0.13);
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #F4F7F6; --panel: #FFFFFF; --panel-2: #EAF0EE;
+    --ink: #16302C; --muted: #5A716C; --faint: #8CA09B; --line: #C9D6D2;
+    --accent: #0F8577; --accent-ink: #0B6459; --accent-soft: rgba(15,133,119,0.10);
+    --warn: #B97F1F; --warn-soft: rgba(185,127,31,0.12);
+    --crit: #A8402F; --crit-soft: rgba(168,64,47,0.10);
+  }
+  :root[data-theme="dark"] {
+    --paper: #0B1514; --panel: #101D1B; --panel-2: #152523;
+    --ink: #DCE8E5; --muted: #93A9A4; --faint: #63807A; --line: #24403C;
+    --accent: #41C0AF; --accent-ink: #63D2C3; --accent-soft: rgba(65,192,175,0.13);
+    --warn: #D9A441; --warn-soft: rgba(217,164,65,0.14);
+    --crit: #D96C57; --crit-soft: rgba(217,108,87,0.13);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: clamp(14px, 1.35vw, 17px);
+    line-height: 1.5;
+    overflow: hidden;
+  }
+
+  .deck { position: fixed; inset: 0; }
+  .slide {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    padding: clamp(1.5rem, 4vw, 3.5rem);
+    opacity: 0; visibility: hidden;
+    transform: translateX(2.5%);
+    transition: opacity .32s ease, transform .32s ease, visibility 0s linear .32s;
+  }
+  .slide.active {
+    opacity: 1; visibility: visible; transform: none;
+    transition: opacity .32s ease, transform .32s ease;
+  }
+  .slide.before { transform: translateX(-2.5%); }
+  @media (prefers-reduced-motion: reduce) {
+    .slide, .slide.active { transition: none; transform: none; }
+  }
+
+  .inner { width: 100%; max-width: 1080px; }
+
+  .eyebrow {
+    font-family: var(--display); font-weight: 600;
+    font-size: .74rem; letter-spacing: .2em; text-transform: uppercase;
+    color: var(--accent-ink); margin: 0 0 .55rem;
+  }
+  h1 {
+    font-family: var(--display); font-weight: 700;
+    font-size: clamp(2.1rem, 5.4vw, 3.6rem);
+    line-height: 1.08; margin: 0 0 .8rem; letter-spacing: -0.01em;
+  }
+  h2 {
+    font-family: var(--display); font-weight: 700;
+    font-size: clamp(1.5rem, 3.4vw, 2.3rem);
+    line-height: 1.12; margin: 0 0 .5rem; letter-spacing: -0.005em;
+  }
+  .lede { color: var(--muted); max-width: 46em; margin: 0 0 1.2rem; }
+  .lede strong { color: var(--ink); }
+  .foot {
+    margin-top: 1.1rem; color: var(--faint); font-size: .8rem;
+  }
+  .foot code, .k {
+    font-family: var(--mono); font-size: .92em; color: var(--muted);
+    background: var(--panel-2); border-radius: 4px; padding: .05em .35em;
+  }
+
+  figure { margin: 0; }
+  svg { display: block; width: 100%; height: auto; }
+  svg text { font-family: var(--body); fill: var(--ink); }
+  svg .t-muted { fill: var(--muted); }
+  svg .t-faint { fill: var(--faint); }
+  svg .t-accent { fill: var(--accent-ink); }
+  svg .t-warn { fill: var(--warn); }
+  svg .t-crit { fill: var(--crit); }
+  svg .t-mono { font-family: var(--mono); }
+  svg .t-disp { font-family: var(--display); font-weight: 600; }
+  svg .box { fill: var(--panel); stroke: var(--line); stroke-width: 1.5; }
+  svg .box2 { fill: var(--panel-2); stroke: var(--line); stroke-width: 1.5; }
+  svg .box-accent { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+  svg .box-warn { fill: var(--warn-soft); stroke: var(--warn); stroke-width: 1.5; }
+  svg .box-crit { fill: var(--crit-soft); stroke: var(--crit); stroke-width: 1.5; }
+  svg .edge { stroke: var(--muted); stroke-width: 1.6; fill: none; }
+  svg .edge-accent { stroke: var(--accent); stroke-width: 2; fill: none; }
+  svg .edge-faint { stroke: var(--line); stroke-width: 1.4; fill: none; }
+  svg .edge-dash { stroke-dasharray: 5 5; }
+  svg .grid { stroke: var(--line); stroke-width: 1; }
+  svg .bar { fill: var(--accent); }
+  svg .arr { fill: var(--muted); }
+  svg .arr-accent { fill: var(--accent); }
+
+  .cols { display: grid; gap: 1.4rem; align-items: center; }
+  .cols-2 { grid-template-columns: minmax(0,5fr) minmax(0,7fr); }
+  .cols-2r { grid-template-columns: minmax(0,7fr) minmax(0,5fr); }
+  @media (max-width: 760px) { .cols-2, .cols-2r { grid-template-columns: 1fr; } }
+
+  .cards { display: grid; gap: .8rem; }
+  .cards-2 { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 640px) { .cards-2 { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: .85rem 1rem;
+  }
+  .card h3 {
+    font-family: var(--display); font-size: .95rem; margin: 0 0 .25rem;
+    display: flex; align-items: center; gap: .5rem;
+  }
+  .card p { margin: 0; color: var(--muted); font-size: .88rem; }
+  .card p strong { color: var(--ink); }
+  .card.warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); background: var(--warn-soft); }
+  .card.crit { border-color: color-mix(in srgb, var(--crit) 40%, var(--line)); background: var(--crit-soft); }
+  .card.ok { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: var(--accent-soft); }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: .4em;
+    font-family: var(--display); font-size: .74rem; font-weight: 600;
+    letter-spacing: .04em;
+    border-radius: 999px; padding: .28em .8em;
+    background: var(--panel-2); color: var(--muted);
+    border: 1px solid var(--line);
+  }
+  .chip.ok { background: var(--accent-soft); color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+  .chip.no { color: var(--faint); text-decoration: line-through; }
+  .chip.warn { background: var(--warn-soft); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, var(--line)); }
+
+  .bigline {
+    font-family: var(--display); font-weight: 700;
+    font-size: clamp(1.5rem, 3.6vw, 2.5rem); line-height: 1.2;
+    max-width: 22em;
+  }
+  .bigline em { font-style: normal; color: var(--accent-ink); }
+  .bigline .no { color: var(--crit); }
+
+  /* decisions list */
+  .decide { display: grid; gap: .55rem; }
+  .decide-row {
+    display: grid; grid-template-columns: 9.5em 1fr; gap: .9rem; align-items: baseline;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: .6rem .9rem;
+  }
+  .decide-row .lbl { font-family: var(--display); font-weight: 600; font-size: .82rem; color: var(--faint); text-transform: uppercase; letter-spacing: .08em; }
+  .decide-row .why { color: var(--muted); font-size: .85rem; margin-top: .15rem; }
+  @media (max-width: 640px) { .decide-row { grid-template-columns: 1fr; } }
+
+  /* chrome */
+  .progress {
+    position: fixed; top: 0; left: 0; height: 3px; width: 0%;
+    background: var(--accent); z-index: 10; transition: width .3s ease;
+  }
+  .hud {
+    position: fixed; bottom: 1rem; left: 0; right: 0; z-index: 10;
+    display: flex; align-items: center; justify-content: center; gap: 1rem;
+    pointer-events: none;
+  }
+  .hud .counter { font-family: var(--mono); font-size: .75rem; color: var(--faint); min-width: 4.5em; text-align: center; }
+  .navbtn {
+    pointer-events: auto; cursor: pointer;
+    width: 2.1rem; height: 2.1rem; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+    font-size: 1rem; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .navbtn:hover { color: var(--accent-ink); border-color: var(--accent); }
+  .dots { pointer-events: auto; display: flex; gap: .35rem; }
+  .dots button {
+    width: .5rem; height: .5rem; border-radius: 999px; border: 0; padding: 0;
+    background: var(--line); cursor: pointer;
+  }
+  .dots button.on { background: var(--accent); }
+  .hint {
+    position: fixed; bottom: 1.1rem; right: 1.2rem; z-index: 10;
+    font-size: .72rem; color: var(--faint); font-family: var(--mono);
+  }
+  @media (max-width: 760px) { .dots { display: none; } .hint { display: none; } }
+
+  /* print: all slides stacked */
+  @media print {
+    body { overflow: visible; }
+    .deck { position: static; }
+    .slide { position: static; opacity: 1; visibility: visible; transform: none; min-height: 100vh; page-break-after: always; }
+    .progress, .hud, .hint { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+
+<div class="deck" id="deck">
+
+<!-- ============ 1 · TITLE ============ -->
+<section class="slide" data-title="Title">
+  <div class="inner" style="text-align:center">
+    <p class="eyebrow">OpenEMR fork · Architecture story</p>
+    <h1>Clinical Co-Pilot</h1>
+    <p class="lede" style="margin:0 auto 1.6rem">A chart-embedded agent that answers <strong>“what do I need to know about this patient right now?”</strong> — in seconds, with every claim cited.</p>
+    <figure aria-label="A chart panel asks the agent service, which reads FHIR and returns a cited answer">
+    <svg viewBox="0 0 760 150" role="img" style="max-width:640px;margin:0 auto">
+      <rect class="box" x="20" y="35" width="200" height="80" rx="12"/>
+      <text x="120" y="70" text-anchor="middle" class="t-disp" font-size="15">Patient chart</text>
+      <text x="120" y="92" text-anchor="middle" class="t-muted" font-size="12">co-pilot panel</text>
+      <rect class="box-accent" x="290" y="35" width="200" height="80" rx="12"/>
+      <text x="390" y="70" text-anchor="middle" class="t-disp t-accent" font-size="15">Agent service</text>
+      <text x="390" y="92" text-anchor="middle" class="t-muted" font-size="12">verify before answer</text>
+      <rect class="box2" x="560" y="35" width="180" height="80" rx="12"/>
+      <text x="650" y="70" text-anchor="middle" class="t-disp" font-size="15">FHIR R4 API</text>
+      <text x="650" y="92" text-anchor="middle" class="t-muted" font-size="12">the EMR decides access</text>
+      <line class="edge" x1="220" y1="75" x2="283" y2="75"/>
+      <polygon class="arr" points="283,70 293,75 283,80"/>
+      <line class="edge" x1="490" y1="75" x2="553" y2="75"/>
+      <polygon class="arr" points="553,70 563,75 553,80"/>
+    </svg>
+    </figure>
+    <p class="foot">Source: <code>ARCHITECTURE.md</code> · <code>AUDIT.md</code> · <code>USER.md</code></p>
+  </div>
+</section>
+
+<!-- ============ 2 · THE MOMENT ============ -->
+<section class="slide" data-title="The moment">
+  <div class="inner">
+    <p class="eyebrow">The moment it serves</p>
+    <h2>90 seconds between patients</h2>
+    <p class="lede">Pre-visit review, chart already open. No new app, no new login, no context switch.</p>
+    <figure aria-label="Timeline of the 90-second gap between patients, with the co-pilot answering inside it">
+    <svg viewBox="0 0 900 210" role="img">
+      <line class="edge-faint" x1="40" y1="150" x2="860" y2="150"/>
+      <circle cx="70" cy="150" r="7" fill="var(--muted)"/>
+      <text x="70" y="180" text-anchor="middle" class="t-muted" font-size="13">previous patient leaves</text>
+      <circle cx="830" cy="150" r="7" fill="var(--muted)"/>
+      <text x="830" y="180" text-anchor="middle" class="t-muted" font-size="13">next patient walks in</text>
+      <rect x="120" y="138" width="660" height="24" rx="12" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+      <text x="450" y="155" text-anchor="middle" class="t-accent t-disp" font-size="13">the whole window: ~90 seconds</text>
+      <rect class="box" x="150" y="30" width="290" height="70" rx="12"/>
+      <text x="295" y="60" text-anchor="middle" font-size="14">“What do I need to know</text>
+      <text x="295" y="80" text-anchor="middle" font-size="14">about this patient right now?”</text>
+      <path class="edge" d="M295 100 L295 132"/>
+      <polygon class="arr" points="290,132 295,142 300,132"/>
+      <rect class="box-accent" x="480" y="30" width="290" height="70" rx="12"/>
+      <text x="625" y="58" text-anchor="middle" class="t-accent t-disp" font-size="14">Answer in seconds</text>
+      <text x="625" y="82" text-anchor="middle" class="t-muted" font-size="13">every claim cited to a record</text>
+      <path class="edge-accent" d="M625 100 L625 132"/>
+      <polygon class="arr-accent" points="620,132 625,142 630,132"/>
+    </svg>
+    </figure>
+    <p class="foot">Target user, workflow &amp; use cases: <code>USER.md</code></p>
+  </div>
+</section>
+
+<!-- ============ 3 · THE SHAPE ============ -->
+<section class="slide" data-title="The shape">
+  <div class="inner">
+    <p class="eyebrow">System overview</p>
+    <h2>A thin module + a separate agent service</h2>
+    <figure aria-label="System diagram: OpenEMR hosts the chart panel, OAuth, FHIR API with ACL, and audit log; the Python agent service holds the loop, tools and verification; LLM and trace backend are external">
+    <svg viewBox="0 0 960 330" role="img">
+      <!-- OpenEMR boundary -->
+      <rect class="box2" x="20" y="30" width="360" height="270" rx="16"/>
+      <text x="40" y="58" class="t-disp" font-size="15">OpenEMR</text>
+      <rect class="box" x="40" y="75" width="150" height="56" rx="10"/>
+      <text x="115" y="99" text-anchor="middle" font-size="13">Chart panel</text>
+      <text x="115" y="117" text-anchor="middle" class="t-muted" font-size="11">custom module</text>
+      <rect class="box" x="210" y="75" width="150" height="56" rx="10"/>
+      <text x="285" y="99" text-anchor="middle" font-size="13">OAuth2 / SMART</text>
+      <text x="285" y="117" text-anchor="middle" class="t-muted" font-size="11">token issuer</text>
+      <rect class="box" x="40" y="155" width="150" height="56" rx="10"/>
+      <text x="115" y="179" text-anchor="middle" font-size="13">FHIR R4 API</text>
+      <text x="115" y="197" text-anchor="middle" class="t-muted" font-size="11">ACL + scopes</text>
+      <rect class="box" x="210" y="155" width="150" height="56" rx="10"/>
+      <text x="285" y="179" text-anchor="middle" font-size="13">Audit log</text>
+      <text x="285" y="197" text-anchor="middle" class="t-mono t-muted" font-size="10">EventAuditLogger</text>
+      <text x="40" y="270" class="t-muted" font-size="12">PHP · the system of record —</text>
+      <text x="40" y="288" class="t-muted" font-size="12">no core edits, sanctioned module hooks</text>
+
+      <!-- Agent service boundary -->
+      <rect class="box-accent" x="450" y="30" width="300" height="270" rx="16"/>
+      <text x="470" y="58" class="t-disp t-accent" font-size="15">Agent service</text>
+      <rect class="box" x="470" y="75" width="260" height="56" rx="10"/>
+      <text x="600" y="99" text-anchor="middle" font-size="13">Agent loop + tool registry</text>
+      <text x="600" y="117" text-anchor="middle" class="t-muted" font-size="11">read-only tools, Pydantic contracts</text>
+      <rect class="box" x="470" y="155" width="260" height="56" rx="10"/>
+      <text x="600" y="179" text-anchor="middle" font-size="13">Verification layer</text>
+      <text x="600" y="197" text-anchor="middle" class="t-muted" font-size="11">citations · numerics · CDS flags</text>
+      <text x="470" y="270" class="t-muted" font-size="12">Python / FastAPI · scales alone ·</text>
+      <text x="470" y="288" class="t-mono t-muted" font-size="11">/health · /ready</text>
+
+      <!-- Externals -->
+      <rect class="box" x="820" y="75" width="120" height="56" rx="10"/>
+      <text x="880" y="99" text-anchor="middle" font-size="13">LLM</text>
+      <text x="880" y="117" text-anchor="middle" class="t-muted" font-size="11">BAA-covered</text>
+      <rect class="box" x="820" y="155" width="120" height="56" rx="10"/>
+      <text x="880" y="179" text-anchor="middle" font-size="13">Traces</text>
+      <text x="880" y="197" text-anchor="middle" class="t-muted" font-size="11">swappable</text>
+
+      <!-- edges -->
+      <line class="edge" x1="380" y1="103" x2="443" y2="103"/>
+      <polygon class="arr" points="443,98 453,103 443,108"/>
+      <text x="415" y="90" text-anchor="middle" class="t-muted" font-size="11">token</text>
+      <line class="edge" x1="450" y1="183" x2="397" y2="183"/>
+      <polygon class="arr" points="397,188 387,183 397,178"/>
+      <text x="424" y="172" text-anchor="middle" class="t-muted" font-size="11">reads</text>
+      <line class="edge" x1="750" y1="103" x2="813" y2="103"/>
+      <polygon class="arr" points="813,98 823,103 813,108"/>
+      <line class="edge edge-dash" x1="750" y1="183" x2="813" y2="183"/>
+      <polygon class="arr" points="813,178 823,183 813,188"/>
+    </svg>
+    </figure>
+    <p class="foot"><span class="chip no">rejected: in-process PHP agent</span>&nbsp; long LLM calls pin Apache workers · weak agent ecosystem · no clean trust boundary</p>
+  </div>
+</section>
+
+<!-- ============ 4 · AUTHORIZATION ============ -->
+<section class="slide" data-title="Authorization">
+  <div class="inner">
+    <p class="eyebrow">Trust boundary №1</p>
+    <h2>Authorization is inherited, not re-implemented</h2>
+    <figure aria-label="The user's SMART token travels with every request; OpenEMR's ACL and scopes decide access; the agent has no direct database path">
+    <svg viewBox="0 0 960 240" role="img">
+      <rect class="box" x="20" y="60" width="170" height="80" rx="12"/>
+      <text x="105" y="94" text-anchor="middle" font-size="14">Physician</text>
+      <text x="105" y="114" text-anchor="middle" class="t-muted" font-size="12">open chart</text>
+      <rect class="box-accent" x="270" y="60" width="190" height="80" rx="12"/>
+      <text x="365" y="88" text-anchor="middle" class="t-disp t-accent" font-size="14">SMART token</text>
+      <text x="365" y="108" text-anchor="middle" class="t-muted" font-size="12">this user + this patient</text>
+      <text x="365" y="126" text-anchor="middle" class="t-muted" font-size="12">short-lived</text>
+      <rect class="box" x="540" y="60" width="170" height="80" rx="12"/>
+      <text x="625" y="94" text-anchor="middle" font-size="14">Agent service</text>
+      <text x="625" y="114" text-anchor="middle" class="t-muted" font-size="12">holds no credentials</text>
+      <rect class="box2" x="790" y="30" width="150" height="140" rx="12"/>
+      <text x="865" y="60" text-anchor="middle" class="t-disp" font-size="14">EMR decides</text>
+      <text x="865" y="86" text-anchor="middle" class="t-muted" font-size="12">ACL role checks</text>
+      <text x="865" y="106" text-anchor="middle" class="t-muted" font-size="12">OAuth scopes</text>
+      <text x="865" y="126" text-anchor="middle" class="t-muted" font-size="12">patient binding</text>
+      <text x="865" y="146" text-anchor="middle" class="t-mono t-muted" font-size="10">puuidBind</text>
+      <line class="edge" x1="190" y1="100" x2="263" y2="100"/>
+      <polygon class="arr" points="263,95 273,100 263,105"/>
+      <line class="edge" x1="460" y1="100" x2="533" y2="100"/>
+      <polygon class="arr" points="533,95 543,100 533,105"/>
+      <line class="edge-accent" x1="710" y1="100" x2="783" y2="100"/>
+      <polygon class="arr-accent" points="783,95 793,100 783,105"/>
+      <text x="746" y="88" text-anchor="middle" class="t-muted" font-size="11">every read</text>
+      <!-- forbidden DB path -->
+      <path class="edge edge-dash" d="M625 140 Q625 205 790 205" stroke="var(--crit)"/>
+      <rect class="box-crit" x="790" y="188" width="150" height="34" rx="10"/>
+      <text x="865" y="210" text-anchor="middle" class="t-crit" font-size="12">direct SQL — none</text>
+      <circle cx="700" cy="196" r="13" fill="var(--paper)" stroke="var(--crit)" stroke-width="2"/>
+      <line x1="691" y1="187" x2="709" y2="205" stroke="var(--crit)" stroke-width="2"/>
+    </svg>
+    </figure>
+    <p class="bigline" style="font-size:clamp(1.1rem,2.4vw,1.5rem)">A nurse’s token sees what a nurse sees.</p>
+    <p class="foot">Known limit, stated up front: OpenEMR’s ACL is role-based, not panel-based — the agent inherits exactly that boundary. It widens nothing; it narrows nothing.</p>
+  </div>
+</section>
+
+<!-- ============ 5 · READ-ONLY ============ -->
+<section class="slide" data-title="Read-only">
+  <div class="inner">
+    <div class="cols cols-2">
+      <div>
+        <p class="eyebrow">Trust boundary №2</p>
+        <h2>The agent is read-only</h2>
+        <p class="lede">A read-only agent can produce a bad summary. A writing agent can corrupt a chart. Zero write tools in v1 — which also defuses prompt injection: instructions smuggled into a note have <strong>no write tools to escalate into</strong>.</p>
+        <p><span class="chip ok">6 tools · all read</span> <span class="chip no">write access</span></p>
+      </div>
+      <figure aria-label="Six read-only tools flow into the chart; a write path is struck out">
+      <svg viewBox="0 0 460 330" role="img">
+        <g font-size="12.5">
+          <rect class="box" x="20" y="18" width="230" height="34" rx="8"/><text x="35" y="40" class="t-mono">get_patient_snapshot</text>
+          <rect class="box" x="20" y="60" width="230" height="34" rx="8"/><text x="35" y="82" class="t-mono">search_observations</text>
+          <rect class="box" x="20" y="102" width="230" height="34" rx="8"/><text x="35" y="124" class="t-mono">get_medication_history</text>
+          <rect class="box" x="20" y="144" width="230" height="34" rx="8"/><text x="35" y="166" class="t-mono">get_encounters_since</text>
+          <rect class="box" x="20" y="186" width="230" height="34" rx="8"/><text x="35" y="208" class="t-mono">search_documents</text>
+          <rect class="box" x="20" y="228" width="230" height="34" rx="8"/><text x="35" y="250" class="t-mono">get_immunizations</text>
+        </g>
+        <g class="t-accent" font-size="10">
+          <text x="238" y="40" text-anchor="end" class="t-accent">R</text><text x="238" y="82" text-anchor="end" class="t-accent">R</text>
+          <text x="238" y="124" text-anchor="end" class="t-accent">R</text><text x="238" y="166" text-anchor="end" class="t-accent">R</text>
+          <text x="238" y="208" text-anchor="end" class="t-accent">R</text><text x="238" y="250" text-anchor="end" class="t-accent">R</text>
+        </g>
+        <rect class="box-accent" x="330" y="95" width="110" height="90" rx="12"/>
+        <text x="385" y="133" text-anchor="middle" class="t-disp t-accent" font-size="13">Chart</text>
+        <text x="385" y="153" text-anchor="middle" class="t-muted" font-size="11">FHIR reads only</text>
+        <g class="edge-faint">
+          <path d="M250 35 Q300 35 328 110"/><path d="M250 77 Q300 77 328 120"/>
+          <path d="M250 119 Q300 119 328 132"/><path d="M250 161 Q300 161 328 148"/>
+          <path d="M250 203 Q300 203 328 160"/><path d="M250 245 Q300 245 328 170"/>
+        </g>
+        <!-- struck write -->
+        <rect class="box-crit" x="20" y="284" width="230" height="34" rx="8"/>
+        <text x="35" y="306" class="t-mono t-crit" font-size="12.5" text-decoration="line-through">write_to_chart</text>
+        <line x1="255" y1="301" x2="320" y2="301" stroke="var(--crit)" stroke-width="1.6" stroke-dasharray="4 4"/>
+        <circle cx="322" cy="301" r="11" fill="var(--paper)" stroke="var(--crit)" stroke-width="2"/>
+        <line x1="314" y1="293" x2="330" y2="309" stroke="var(--crit)" stroke-width="2"/>
+      </svg>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 6 · VERIFICATION ============ -->
+<section class="slide" data-title="Verification">
+  <div class="inner">
+    <p class="eyebrow">Trust is the product</p>
+    <h2>Every claim cites a record — and a machine checks it</h2>
+    <figure aria-label="Pipeline: tools return resources with IDs, the model drafts with citations, a deterministic checker validates IDs and numbers, unverified claims fail closed">
+    <svg viewBox="0 0 960 220" role="img">
+      <rect class="box" x="15" y="45" width="195" height="90" rx="12"/>
+      <text x="112" y="76" text-anchor="middle" font-size="13.5">Tools return FHIR</text>
+      <text x="112" y="95" text-anchor="middle" font-size="13.5">resources with IDs</text>
+      <text x="112" y="118" text-anchor="middle" class="t-mono t-muted" font-size="11">Observation/842 …</text>
+      <rect class="box" x="265" y="45" width="195" height="90" rx="12"/>
+      <text x="362" y="76" text-anchor="middle" font-size="13.5">Model drafts —</text>
+      <text x="362" y="95" text-anchor="middle" font-size="13.5">citation per claim</text>
+      <text x="362" y="118" text-anchor="middle" class="t-mono t-muted" font-size="11">“A1c 8.1 [Observation/842]”</text>
+      <rect class="box-accent" x="515" y="30" width="215" height="120" rx="12"/>
+      <text x="622" y="58" text-anchor="middle" class="t-disp t-accent" font-size="14">Deterministic check</text>
+      <text x="622" y="82" text-anchor="middle" class="t-muted" font-size="12.5">cited ID ∈ this request’s results?</text>
+      <text x="622" y="102" text-anchor="middle" class="t-muted" font-size="12.5">numbers match the resource?</text>
+      <text x="622" y="128" text-anchor="middle" class="t-faint" font-size="10.5">plain code · ms · can’t hallucinate</text>
+      <line class="edge" x1="210" y1="90" x2="258" y2="90"/><polygon class="arr" points="258,85 268,90 258,95"/>
+      <line class="edge" x1="460" y1="90" x2="508" y2="90"/><polygon class="arr" points="508,85 518,90 508,95"/>
+      <line class="edge-accent" x1="730" y1="65" x2="790" y2="65"/><polygon class="arr-accent" points="790,60 800,65 790,70"/>
+      <rect class="box" x="800" y="42" width="145" height="46" rx="10"/>
+      <text x="872" y="70" text-anchor="middle" class="t-accent" font-size="13">✓ ships, cited</text>
+      <line class="edge" x1="730" y1="115" x2="790" y2="115" stroke="var(--crit)"/><polygon points="790,110 800,115 790,120" fill="var(--crit)"/>
+      <rect class="box-crit" x="800" y="92" width="145" height="46" rx="10"/>
+      <text x="872" y="112" text-anchor="middle" class="t-crit" font-size="12.5">✕ fails closed:</text>
+      <text x="872" y="129" text-anchor="middle" class="t-crit" font-size="11.5">strip · deep links</text>
+    </svg>
+    </figure>
+    <div class="cards cards-2" style="margin-top:.6rem">
+      <div class="card ok"><h3>Hot path catches grounding</h3><p>Fabricated or uncited claims cannot ship. Plus rule-based CDS: drug-interaction flags from the EMR’s own engine — and uncoded meds are flagged <strong>“interaction check unavailable,”</strong> never silently passed.</p></div>
+      <div class="card warn"><h3>Not entailment — by design</h3><p>A claim can cite a real lab and misstate it. That class is measured by an <strong>offline LLM-judge eval</strong> — an in-path judge doubles latency and adds a second model to trust.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 7 · SPEED ============ -->
+<section class="slide" data-title="Speed">
+  <div class="inner">
+    <p class="eyebrow">Latency by design</p>
+    <h2>One parallel snapshot, then depth on demand</h2>
+    <div class="cols cols-2r">
+      <figure aria-label="One snapshot call fans out to six FHIR fetches in parallel and returns in a single agent step">
+      <svg viewBox="0 0 520 250" role="img">
+        <rect class="box-accent" x="15" y="90" width="185" height="70" rx="12"/>
+        <text x="107" y="119" text-anchor="middle" class="t-disp t-accent" font-size="13.5">get_patient_snapshot</text>
+        <text x="107" y="140" text-anchor="middle" class="t-muted" font-size="11.5">one agent step</text>
+        <g font-size="12">
+          <rect class="box" x="300" y="8" width="205" height="28" rx="7"/><text x="315" y="27">demographics</text>
+          <rect class="box" x="300" y="44" width="205" height="28" rx="7"/><text x="315" y="63">active medications</text>
+          <rect class="box" x="300" y="80" width="205" height="28" rx="7"/><text x="315" y="99">problems</text>
+          <rect class="box" x="300" y="116" width="205" height="28" rx="7"/><text x="315" y="135">allergies</text>
+          <rect class="box" x="300" y="152" width="205" height="28" rx="7"/><text x="315" y="171">last encounter</text>
+          <rect class="box-warn" x="300" y="196" width="205" height="40" rx="7"/>
+          <text x="315" y="212" font-size="12">recent labs</text>
+          <text x="315" y="228" class="t-warn" font-size="10.5">own timeout · degrades gracefully</text>
+        </g>
+        <g class="edge-faint">
+          <path d="M200 110 Q255 110 296 22"/><path d="M200 117 Q255 117 296 58"/>
+          <path d="M200 124 Q255 124 296 94"/><path d="M200 131 Q255 131 296 130"/>
+          <path d="M200 138 Q255 138 296 166"/><path d="M200 145 Q255 145 296 214"/>
+        </g>
+        <text x="248" y="248" text-anchor="middle" class="t-muted" font-size="11.5">in parallel</text>
+      </svg>
+      </figure>
+      <figure aria-label="Latency design targets in seconds: first token under 3, follow-ups under 5, complete snapshot under 10, p95 under 15">
+      <svg viewBox="0 0 460 220" role="img">
+        <g class="grid"><line x1="120" y1="15" x2="120" y2="185"/><line x1="230" y1="15" x2="230" y2="185"/><line x1="340" y1="15" x2="340" y2="185"/><line x1="450" y1="15" x2="450" y2="185"/></g>
+        <g class="t-faint" font-size="10.5" font-family="var(--mono)">
+          <text x="120" y="202" text-anchor="middle">5s</text><text x="230" y="202" text-anchor="middle">10s</text>
+          <text x="340" y="202" text-anchor="middle">15s</text><text x="12" y="202">0</text>
+        </g>
+        <g font-size="12.5">
+          <text x="10" y="42">first token</text>
+          <rect class="bar" x="10" y="52" width="66" height="10" rx="4"/>
+          <text x="84" y="61" class="t-muted t-mono" font-size="11">&lt; 3s</text>
+          <text x="10" y="90">follow-up</text>
+          <rect class="bar" x="10" y="100" width="110" height="10" rx="4"/>
+          <text x="128" y="109" class="t-muted t-mono" font-size="11">&lt; 5s</text>
+          <text x="10" y="138">full snapshot</text>
+          <rect class="bar" x="10" y="148" width="220" height="10" rx="4"/>
+          <text x="238" y="157" class="t-muted t-mono" font-size="11">&lt; 10s</text>
+          <text x="10" y="176" class="t-muted">p95, any request</text>
+          <rect x="10" y="182" width="330" height="10" rx="4" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1"/>
+          <text x="348" y="191" class="t-muted t-mono" font-size="11">&lt; 15s</text>
+        </g>
+      </svg>
+      </figure>
+    </div>
+    <p class="foot">Design targets, not measurements — validated under load before promised. Plus: streaming, model tiering (fast tier routes, strong tier writes), and partial results that <strong>say what’s missing</strong>.</p>
+  </div>
+</section>
+
+<!-- ============ 8 · AUDIT FINDING ============ -->
+<section class="slide" data-title="What the audit changed">
+  <div class="inner">
+    <p class="eyebrow">What the code audit changed</p>
+    <h2>The latency floor isn’t FHIR — it’s the bootstrap</h2>
+    <figure aria-label="Each of the six parallel FHIR calls independently pays a 100 to 300 millisecond globals reload before doing its real work">
+    <svg viewBox="0 0 960 200" role="img">
+      <text x="20" y="30" class="t-muted" font-size="13">every request, before any real work:</text>
+      <g>
+        <!-- 6 request lanes, each with a "tax" block then work block -->
+        <g font-size="11">
+          <rect class="box-warn" x="20" y="50" width="130" height="26" rx="6"/><rect class="box" x="154" y="50" width="105" height="26" rx="6"/>
+          <rect class="box-warn" x="20" y="84" width="130" height="26" rx="6"/><rect class="box" x="154" y="84" width="90" height="26" rx="6"/>
+          <rect class="box-warn" x="20" y="118" width="130" height="26" rx="6"/><rect class="box" x="154" y="118" width="120" height="26" rx="6"/>
+          <rect class="box-warn" x="20" y="152" width="130" height="26" rx="6"/><rect class="box" x="154" y="152" width="80" height="26" rx="6"/>
+          <text x="85" y="67" text-anchor="middle" class="t-warn">reload ~500 globals</text>
+          <text x="85" y="101" text-anchor="middle" class="t-warn">reload ~500 globals</text>
+          <text x="85" y="135" text-anchor="middle" class="t-warn">reload ~500 globals</text>
+          <text x="85" y="169" text-anchor="middle" class="t-warn">reload ~500 globals</text>
+          <text x="206" y="67" text-anchor="middle" class="t-muted">query</text>
+          <text x="199" y="101" text-anchor="middle" class="t-muted">query</text>
+          <text x="214" y="135" text-anchor="middle" class="t-muted">query</text>
+          <text x="194" y="169" text-anchor="middle" class="t-muted">query</text>
+          <text x="30" y="196" class="t-faint" font-size="11">× 6 parallel calls — ~100–300ms tax each, zero reuse</text>
+        </g>
+      </g>
+      <g font-size="13">
+        <rect class="box" x="360" y="50" width="280" height="128" rx="12"/>
+        <text x="380" y="80" class="t-disp" font-size="13.5">Highest-leverage fix</text>
+        <text x="380" y="106" class="t-muted" font-size="12.5">bootstrap short-circuit / cached</text>
+        <text x="380" y="124" class="t-muted" font-size="12.5">read model for token-auth FHIR</text>
+        <text x="380" y="152" class="t-accent" font-size="12.5">promoted to an early task,</text>
+        <text x="380" y="168" class="t-accent" font-size="12.5">not a scale-tier concern</text>
+        <rect class="box" x="670" y="50" width="280" height="128" rx="12"/>
+        <text x="690" y="76" class="t-disp" font-size="13.5">Three more consequences</text>
+        <text x="690" y="98" class="t-muted" font-size="12">labs: no patient index →</text>
+        <text x="690" y="113" class="t-muted" font-size="12">own timeout, graceful degrade</text>
+        <text x="690" y="133" class="t-muted" font-size="12">never inline provenance — doubles row work</text>
+        <text x="690" y="153" class="t-muted" font-size="12">encounter forms fan out table-per-form →</text>
+        <text x="690" y="168" class="t-muted" font-size="12">bounded batches, full depth on follow-up</text>
+      </g>
+    </svg>
+    </figure>
+    <p class="foot">The FHIR layer itself is single-query, not N+1 (<code>BaseService::search()</code>). Findings: <code>AUDIT.md §2</code></p>
+  </div>
+</section>
+
+<!-- ============ 9 · FAILURE MODES ============ -->
+<section class="slide" data-title="Failure modes">
+  <div class="inner">
+    <p class="eyebrow">Governing invariant</p>
+    <h2 class="bigline" style="max-width:none">The physician always knows what the agent did <span class="no">not</span> check.</h2>
+    <p class="lede">A summary that omits a section must be distinguishable from one that verified the section is empty.</p>
+    <div class="cards cards-2">
+      <div class="card"><h3>🧪 One tool fails (labs)</h3><p>Answer with the rest + banner: <strong>“labs unavailable — covers meds, problems, allergies.”</strong> Never silently narrower.</p></div>
+      <div class="card"><h3>🔌 LLM down or slow</h3><p>Non-AI fallback: the panel renders a <strong>plain structured snapshot</strong> straight from FHIR. No model needed to show a med list.</p></div>
+      <div class="card"><h3>🛑 Verification fails</h3><p><strong>Fail closed.</strong> Strip or block, then “couldn’t verify — view source records” with deep links.</p></div>
+      <div class="card"><h3>📭 Empty or thin record</h3><p>Stated affirmatively: <strong>“no encounters on file since 2023.”</strong> Absence of data is clinical information.</p></div>
+    </div>
+    <p class="foot">Malformed model output: Pydantic-validated at every step → one retry → fallback.</p>
+  </div>
+</section>
+
+<!-- ============ 10 · AUDIT TRAIL ============ -->
+<section class="slide" data-title="Audit trail">
+  <div class="inner">
+    <p class="eyebrow">Accountability</p>
+    <h2>Two mechanisms, one trail — joined by a correlation ID</h2>
+    <figure aria-label="Data access is logged natively by the FHIR layer; the module's audit bridge writes invocation and disclosure records; both join in the EMR audit log via the correlation ID">
+    <svg viewBox="0 0 960 260" role="img">
+      <rect class="box" x="20" y="30" width="300" height="86" rx="12"/>
+      <text x="40" y="58" class="t-disp" font-size="13.5">Access log — free</text>
+      <text x="40" y="82" class="t-muted" font-size="12.5">every tool call is a FHIR request as the</text>
+      <text x="40" y="100" class="t-muted" font-size="12.5">user → logged natively, no new code</text>
+      <rect class="box-accent" x="20" y="140" width="300" height="100" rx="12"/>
+      <text x="40" y="168" class="t-disp t-accent" font-size="13.5">Decision + disclosure log — new</text>
+      <text x="40" y="192" class="t-muted" font-size="12.5">what was asked, answered, verified;</text>
+      <text x="40" y="210" class="t-muted" font-size="12.5">PHI sent to the LLM = a §164.528</text>
+      <text x="40" y="228" class="t-muted" font-size="12.5">disclosure, recorded as one</text>
+      <rect class="box" x="420" y="140" width="220" height="100" rx="12"/>
+      <text x="530" y="170" text-anchor="middle" class="t-disp" font-size="13.5">Audit bridge</text>
+      <text x="530" y="192" text-anchor="middle" class="t-muted" font-size="12">small module endpoint;</text>
+      <text x="530" y="210" text-anchor="middle" class="t-muted" font-size="12">agent POSTs, module writes</text>
+      <text x="530" y="228" text-anchor="middle" class="t-mono t-muted" font-size="10.5">ai-clinical-summary</text>
+      <rect class="box2" x="740" y="75" width="200" height="120" rx="12"/>
+      <text x="840" y="105" text-anchor="middle" class="t-disp" font-size="14">EMR audit log</text>
+      <text x="840" y="128" text-anchor="middle" class="t-mono t-muted" font-size="11">EventAuditLogger</text>
+      <text x="840" y="148" text-anchor="middle" class="t-mono t-muted" font-size="11">recordDisclosure()</text>
+      <text x="840" y="174" text-anchor="middle" class="t-muted" font-size="11.5">HIPAA accounting · ATNA</text>
+      <line class="edge" x1="320" y1="73" x2="733" y2="105"/>
+      <polygon class="arr" points="731,100 742,106 730,110"/>
+      <line class="edge-accent" x1="320" y1="190" x2="413" y2="190"/>
+      <polygon class="arr-accent" points="413,185 423,190 413,195"/>
+      <line class="edge-accent" x1="640" y1="180" x2="733" y2="155"/>
+      <polygon class="arr-accent" points="730,151 742,153 733,161"/>
+      <rect x="655" y="20" width="290" height="34" rx="17" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.4"/>
+      <text x="800" y="42" text-anchor="middle" class="t-accent t-mono" font-size="12">correlation-id: 7f3a… on every line</text>
+    </svg>
+    </figure>
+    <div class="cards cards-2" style="margin-top:.6rem">
+      <div class="card"><h3>If the audit POST fails</h3><p><strong>Fail open, with alarm.</strong> Service logs + EMR row are the durable record; the response isn’t blocked.</p></div>
+      <div class="card"><h3>Traces are not the audit</h3><p>SaaS trace retention ≪ HIPAA’s six-year horizon. The trace is a disposable debugging aid — which is what keeps it swappable.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 11 · PORTABILITY ============ -->
+<section class="slide" data-title="Portability">
+  <div class="inner">
+    <p class="eyebrow">Observability</p>
+    <h2>Vendor-neutral by construction</h2>
+    <figure aria-label="Agent code emits OpenTelemetry; an exporter config points at LangSmith today, and Braintrust or Langfuse are plug-compatible destinations">
+    <svg viewBox="0 0 960 250" role="img">
+      <rect class="box" x="30" y="70" width="250" height="110" rx="14"/>
+      <text x="155" y="105" text-anchor="middle" class="t-disp" font-size="14.5">Agent code</text>
+      <text x="155" y="130" text-anchor="middle" class="t-muted" font-size="12.5">emits OpenTelemetry spans</text>
+      <text x="155" y="150" text-anchor="middle" class="t-muted" font-size="12.5">never imports a vendor SDK</text>
+      <rect class="box-accent" x="370" y="90" width="190" height="70" rx="35"/>
+      <text x="465" y="119" text-anchor="middle" class="t-disp t-accent" font-size="13.5">OTel exporter</text>
+      <text x="465" y="140" text-anchor="middle" class="t-muted" font-size="12">configured, not coded</text>
+      <line class="edge" x1="280" y1="125" x2="363" y2="125"/>
+      <polygon class="arr" points="363,120 373,125 363,130"/>
+      <g>
+        <rect class="box-accent" x="680" y="25" width="250" height="56" rx="12"/>
+        <text x="700" y="49" class="t-disp t-accent" font-size="13.5">LangSmith</text>
+        <text x="700" y="68" class="t-muted" font-size="11.5">today — BAA-covered, zero ops</text>
+        <rect class="box" x="680" y="97" width="250" height="56" rx="12"/>
+        <text x="700" y="121" class="t-disp" font-size="13.5">Braintrust</text>
+        <text x="700" y="140" class="t-muted" font-size="11.5">likely destination if we switch</text>
+        <rect class="box" x="680" y="169" width="250" height="56" rx="12"/>
+        <text x="700" y="193" class="t-disp" font-size="13.5">Langfuse (self-hosted)</text>
+        <text x="700" y="212" class="t-muted" font-size="11.5">fallback if no BAA at all</text>
+      </g>
+      <path class="edge-accent" d="M560 118 Q620 110 673 55"/>
+      <polygon class="arr-accent" points="670,52 680,50 674,62"/>
+      <path class="edge edge-dash" d="M560 128 Q620 126 673 124"/>
+      <path class="edge edge-dash" d="M560 136 Q620 150 673 195"/>
+    </svg>
+    </figure>
+    <p><span class="chip ok">OTel spans only</span> <span class="chip ok">eval cases live in git</span> <span class="chip ok">trace carries no compliance role</span> &nbsp;→&nbsp; switching = exporter config + one adapter file. <strong>An adapter swap, not a re-architecture.</strong></p>
+    <p class="foot">Dashboard &amp; alerts ride the same spans: p95 &gt; 15s · error rate &gt; 5% · tool failures &gt; 10% · cross-patient access anomaly — each alert documents its on-call response.</p>
+  </div>
+</section>
+
+<!-- ============ 12 · EVALS ============ -->
+<section class="slide" data-title="Evaluation">
+  <div class="inner">
+    <p class="eyebrow">Evaluation</p>
+    <h2>Every eval case guards a boundary</h2>
+    <div class="cols cols-2r">
+      <div>
+        <div class="cards">
+          <div class="card"><h3>Invariants</h3><p>Every claim cited · numbers match · failed tools disclosed · dosing/diagnosis requests refused.</p></div>
+          <div class="card"><h3>Boundaries</h3><p>Empty record · unreachable data categories (refuse, don’t fabricate) · injected documents · questions about a different patient.</p></div>
+          <div class="card warn"><h3>Real data-quality traps <span class="chip warn" style="font-size:.62rem">from the audit</span></h3><p>“No allergies <strong>recorded</strong>” ≠ “no allergies” · demo patient 2’s Lisinopril is active in one table, inactive in another — the agent must <strong>flag the conflict</strong> · <span class="k">0000-00-00</span> renders as “unknown,” never date math.</p></div>
+        </div>
+      </div>
+      <figure aria-label="Eval fixtures live in git and are synced to the platform, which only runs and displays them">
+      <svg viewBox="0 0 420 300" role="img">
+        <rect class="box-accent" x="60" y="30" width="300" height="120" rx="14"/>
+        <text x="210" y="62" text-anchor="middle" class="t-disp t-accent" font-size="15">git — source of truth</text>
+        <text x="210" y="88" text-anchor="middle" class="t-muted" font-size="12.5">cases as versioned fixtures,</text>
+        <text x="210" y="106" text-anchor="middle" class="t-muted" font-size="12.5">reviewed in PRs, run in CI</text>
+        <text x="210" y="130" text-anchor="middle" class="t-faint" font-size="11.5">every dev bug → a pinned case</text>
+        <line class="edge" x1="210" y1="150" x2="210" y2="195"/>
+        <polygon class="arr" points="205,195 210,205 215,195"/>
+        <text x="222" y="182" class="t-muted" font-size="11.5">synced, one-way</text>
+        <rect class="box" x="100" y="205" width="220" height="70" rx="12"/>
+        <text x="210" y="234" text-anchor="middle" font-size="13.5">eval platform</text>
+        <text x="210" y="256" text-anchor="middle" class="t-muted" font-size="11.5">runner + history viewer only</text>
+      </svg>
+      </figure>
+    </div>
+    <p class="foot">Ground truth: synthetic patients only, where the right answer is known by construction. The suite is weighted toward <strong>cited-but-misstated</strong> claims — the class the hot path can’t catch.</p>
+  </div>
+</section>
+
+<!-- ============ 13 · DECISIONS ============ -->
+<section class="slide" data-title="Decisions">
+  <div class="inner">
+    <p class="eyebrow">Choices, with the road not taken</p>
+    <h2>Five decisions that shaped everything</h2>
+    <div class="decide">
+      <div class="decide-row"><span class="lbl">LLM</span><div><span class="chip ok">Claude, tiered</span> <span class="chip no">self-hosted OSS</span><div class="why">BAA-compatible, strong tool use; self-hosting’s ops cost unjustified in a one-week sprint.</div></div></div>
+      <div class="decide-row"><span class="lbl">Framework</span><div><span class="chip ok">minimal explicit loop</span> <span class="chip no">LangGraph · multi-agent</span><div class="why">One agent, ~6 tools: a loop I can fully explain beats a framework I’d debug under deadline.</div></div></div>
+      <div class="decide-row"><span class="lbl">Service</span><div><span class="chip ok">FastAPI + Pydantic</span> <span class="chip no">PHP in-process</span><div class="why">Non-blocking long calls, independent scaling, contracts at every tool boundary.</div></div></div>
+      <div class="decide-row"><span class="lbl">Data access</span><div><span class="chip ok">FHIR with the user’s token</span> <span class="chip no">direct SQL</span><div class="why">Inherits ACL, scopes, audit. SQL would move authorization into my code. Cost: an HTTP hop — paid for by the parallel snapshot.</div></div></div>
+      <div class="decide-row"><span class="lbl">Traces</span><div><span class="chip ok">LangSmith behind OTel</span> <span class="chip no">Braintrust · Langfuse</span><div class="why">BAA criterion tied; tiebreak on one-platform + zero ops. The design makes later switching deliberately cheap (§11).</div></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 14 · SCALE ============ -->
+<section class="slide" data-title="Scale">
+  <div class="inner">
+    <p class="eyebrow">Cost &amp; scale outlook</p>
+    <h2>Each 10× has one dominant problem</h2>
+    <figure aria-label="Scale staircase: at 100 users one instance, at 1,000 stateless service with Redis, at 10,000 LLM rate limits dominate, at 100,000 multi-region isolation">
+    <svg viewBox="0 0 960 300" role="img">
+      <g class="edge-faint"><line x1="20" y1="262" x2="940" y2="262"/></g>
+      <rect class="box" x="30" y="200" width="205" height="62" rx="10"/>
+      <text x="132" y="226" text-anchor="middle" class="t-disp" font-size="14">~100 users</text>
+      <text x="132" y="248" text-anchor="middle" class="t-muted" font-size="11.5">one instance beside OpenEMR</text>
+      <rect class="box" x="265" y="150" width="205" height="112" rx="10"/>
+      <text x="367" y="178" text-anchor="middle" class="t-disp" font-size="14">~1K</text>
+      <text x="367" y="202" text-anchor="middle" class="t-muted" font-size="11.5">stateless + Redis;</text>
+      <text x="367" y="220" text-anchor="middle" class="t-muted" font-size="11.5">FHIR layer bottlenecks →</text>
+      <text x="367" y="238" text-anchor="middle" class="t-muted" font-size="11.5">read replicas, caching</text>
+      <rect class="box" x="500" y="100" width="205" height="162" rx="10"/>
+      <text x="602" y="128" text-anchor="middle" class="t-disp" font-size="14">~10K</text>
+      <text x="602" y="152" text-anchor="middle" class="t-muted" font-size="11.5">LLM rate limits dominate →</text>
+      <text x="602" y="170" text-anchor="middle" class="t-muted" font-size="11.5">queueing, provisioned</text>
+      <text x="602" y="188" text-anchor="middle" class="t-muted" font-size="11.5">throughput; morning batch</text>
+      <text x="602" y="206" text-anchor="middle" class="t-muted" font-size="11.5">pre-computes the day’s</text>
+      <text x="602" y="224" text-anchor="middle" class="t-muted" font-size="11.5">schedule → warm cache</text>
+      <rect class="box" x="735" y="50" width="205" height="212" rx="10"/>
+      <text x="837" y="78" text-anchor="middle" class="t-disp" font-size="14">~100K</text>
+      <text x="837" y="102" text-anchor="middle" class="t-muted" font-size="11.5">multi-region, per-tenant</text>
+      <text x="837" y="120" text-anchor="middle" class="t-muted" font-size="11.5">isolation; cost becomes a</text>
+      <text x="837" y="138" text-anchor="middle" class="t-muted" font-size="11.5">caching/dedup architecture</text>
+      <text x="837" y="156" text-anchor="middle" class="t-muted" font-size="11.5">problem, not per-token</text>
+      <text x="30" y="292" class="t-faint" font-size="12">state interface is Redis-shaped from day one — scaling out is configuration, not redesign</text>
+    </svg>
+    </figure>
+    <p><span class="chip ok">≈ $0.02–0.10 per interaction</span> <span class="chip ok">≈ $1–2 per physician per day</span></p>
+  </div>
+</section>
+
+<!-- ============ 15 · LIMITS ============ -->
+<section class="slide" data-title="Known limits">
+  <div class="inner">
+    <p class="eyebrow">Stated plainly</p>
+    <h2>The defensible version is the one whose gaps are documented</h2>
+    <div class="cards cards-2">
+      <div class="card"><h3>No panel scoping</h3><p>Inherited from OpenEMR — any chart-access role opens any chart. Detective controls now, with a <strong>cross-patient anomaly alert</strong> as the detector; panel + break-glass on the roadmap.</p></div>
+      <div class="card"><h3>Grounding ≠ entailment</h3><p>Hot path can’t catch cited-but-misstated claims. Measured offline; in-path check only if the rate justifies the latency.</p></div>
+      <div class="card"><h3>Injection residual</h3><p>Adversarial documents can still bias <em>emphasis</em>. Mitigated by evals — honestly not fully solved.</p></div>
+      <div class="card"><h3>Targets unvalidated</h3><p>Latency numbers are design targets until load testing (10/50 concurrent) lands.</p></div>
+      <div class="card"><h3>One persona · data as found</h3><p>Nurses and residents deferred (safe to add later via inherited auth). v1 reconciles meds across disagreeing tables and flags conflicts.</p></div>
+      <div class="card crit"><h3>Three platform fixes gate the panel</h3><p>Reflected-origin CORS, missing session regeneration, and MFA absent from the session guard — fixed before cross-origin exposure, session-cookie hardening alongside. Until then: same-origin module only.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 16 · CLOSE ============ -->
+<section class="slide" data-title="Close">
+  <div class="inner" style="text-align:center">
+    <p class="eyebrow">One invariant to remember</p>
+    <p class="bigline" style="margin:0 auto 1.4rem; max-width:18em">The physician always knows what the agent did <em>and</em> what it did <span class="no">not</span> check — and every claim points at a record.</p>
+    <p style="color:var(--muted)">Read-only · inherited authorization · deterministic verification · honest failure · swappable vendors</p>
+    <p class="foot"><code>ARCHITECTURE.md</code> · <code>AUDIT.md</code> · <code>USER.md</code></p>
+  </div>
+</section>
+
+</div>
+
+<div class="hud">
+  <button class="navbtn" id="prev" aria-label="Previous slide">‹</button>
+  <span class="counter" id="counter">1 / 16</span>
+  <button class="navbtn" id="next" aria-label="Next slide">›</button>
+  <nav class="dots" id="dots" aria-label="Slides"></nav>
+</div>
+<div class="hint">← → to navigate</div>
+
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var dots = document.getElementById('dots');
+  var counter = document.getElementById('counter');
+  var progress = document.getElementById('progress');
+  var i = 0;
+
+  slides.forEach(function (s, n) {
+    var b = document.createElement('button');
+    b.title = (n + 1) + ' · ' + (s.dataset.title || '');
+    b.addEventListener('click', function () { go(n); });
+    dots.appendChild(b);
+  });
+  var dotEls = Array.prototype.slice.call(dots.children);
+
+  function go(n) {
+    n = Math.max(0, Math.min(slides.length - 1, n));
+    i = n;
+    slides.forEach(function (s, k) {
+      s.classList.toggle('active', k === n);
+      s.classList.toggle('before', k < n);
+    });
+    dotEls.forEach(function (d, k) { d.classList.toggle('on', k === n); });
+    counter.textContent = (n + 1) + ' / ' + slides.length;
+    progress.style.width = ((n + 1) / slides.length * 100) + '%';
+    if (history.replaceState) history.replaceState(null, '', '#' + (n + 1));
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); go(i + 1); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); go(i - 1); }
+    else if (e.key === 'Home') { e.preventDefault(); go(0); }
+    else if (e.key === 'End') { e.preventDefault(); go(slides.length - 1); }
+  });
+  document.getElementById('prev').addEventListener('click', function () { go(i - 1); });
+  document.getElementById('next').addEventListener('click', function () { go(i + 1); });
+
+  var touchX = null;
+  document.addEventListener('touchstart', function (e) { touchX = e.touches[0].clientX; }, { passive: true });
+  document.addEventListener('touchend', function (e) {
+    if (touchX === null) return;
+    var dx = e.changedTouches[0].clientX - touchX;
+    if (Math.abs(dx) > 50) go(i + (dx < 0 ? 1 : -1));
+    touchX = null;
+  }, { passive: true });
+
+  var fromHash = parseInt((location.hash || '').slice(1), 10);
+  go(isNaN(fromHash) ? 0 : fromHash - 1);
+})();
+</script>
+</body>
+</html>
