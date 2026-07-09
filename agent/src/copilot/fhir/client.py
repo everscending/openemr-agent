@@ -92,6 +92,19 @@ class FhirClient:
             )
         return payload
 
+    async def capability_statement(self) -> dict[str, Any]:
+        """GET the server CapabilityStatement: ``{base}/metadata``.
+
+        Used as a lightweight reachability probe (T004 readiness checks).
+        """
+        payload = await self._get("/metadata", resource_type="CapabilityStatement")
+        if not isinstance(payload, dict) or "resourceType" not in payload:
+            raise FhirMalformedResponse(
+                "Response for metadata is not a FHIR resource",
+                resource_type="CapabilityStatement",
+            )
+        return payload
+
     async def search(
         self,
         resource_type: str,
