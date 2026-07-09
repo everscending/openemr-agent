@@ -205,6 +205,17 @@ would leave nothing deterministic to check against.
   hallucinate.
 - Where a claim contains parseable numerics (value/unit/date), they are
   compared against the cited resource's actual fields.
+- **Claim vs. scaffolding.** Not every sentence is a clinical claim: greetings,
+  coverage statements ("I checked the labs"), section headers, refusals, and
+  navigation lines carry no citation and are kept. The boundary is *what the
+  sentence is about*, not how it is phrased: scaffolding is a statement about
+  **the agent's process**; a claim is a statement about **the patient**. So the
+  coverage whitelist admits only a retrieval verb over a *data category* (the
+  categories the tools return), never an arbitrary predicate — "I confirmed she
+  is allergic to penicillin" is a claim wearing a process costume, and is
+  stripped when uncited. Likewise "no *<data category>* on record" is coverage,
+  while "no evidence of malignancy" is a diagnostic conclusion. Unrecognized
+  phrasing fails closed.
 - **Fail closed:** a claim citing an unknown ID, citing an ID under the wrong
   resource type, or carrying no citation at all is stripped. The response is
   annotated — a machine-readable list of stripped claims with reasons, a
