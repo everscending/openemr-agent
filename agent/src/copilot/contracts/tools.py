@@ -10,7 +10,7 @@ Every input requires a ``patient_id``; date-range inputs reject
 datum is citable back to its source FHIR resource.
 """
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 from pydantic import AwareDatetime, Field, model_validator
 
@@ -50,6 +50,7 @@ class SearchObservationsInput(ToolInput, DateRangeMixin):
     """Input for ``search_observations``."""
 
     code: str | None = None
+    category: str | None = None
 
 
 class GetMedicationHistoryInput(ToolInput):
@@ -57,9 +58,20 @@ class GetMedicationHistoryInput(ToolInput):
 
 
 class GetEncountersSinceInput(ToolInput):
-    """Input for ``get_encounters_since``."""
+    """Input for ``get_encounters_since``.
+
+    ``since`` is a reference point in the past — "what happened since my
+    last visit" (USER.md UC-3). A future reference date can only be a
+    caller mistake, so it is rejected at the boundary.
+    """
 
     since: AwareDatetime
+
+    @model_validator(mode="after")
+    def _reject_future_reference(self) -> "GetEncountersSinceInput":
+        if self.since > datetime.now(timezone.utc):
+            raise ValueError("since must not be in the future")
+        return self
 
 
 class SearchDocumentsInput(ToolInput, DateRangeMixin):
@@ -150,6 +162,19 @@ class ImmunizationRecord(OutputRecord):
 # ---------------------------------------------------------------------------
 
 
+class QueryReceipt(ContractModel):
+    """Proof of a search that returned nothing (USER.md UC-4).
+
+    A negative answer must state what was searched — the exact query, its
+    scope, and when it ran — never a bare "no". Targeted-tool outputs carry
+    a receipt exactly when they return zero records.
+    """
+
+    query_description: str = Field(min_length=1)
+    scope: str = Field(min_length=1)
+    timestamp: AwareDatetime
+
+
 class PatientSnapshotOutput(ContractModel):
     """Output of ``get_patient_snapshot``.
 
@@ -170,30 +195,53 @@ class PatientSnapshotOutput(ContractModel):
 
 
 class SearchObservationsOutput(ContractModel):
-    """Output of ``search_observations``."""
+    """Output of ``search_observations``.
+
+    ``receipt`` is present exactly when ``records`` is empty (UC-4).
+    """
 
     records: tuple[ObservationRecord, ...]
+    receipt: QueryReceipt | None = None
 
 
 class GetMedicationHistoryOutput(ContractModel):
-    """Output of ``get_medication_history``."""
+    """Output of ``get_medication_history``.
+
+    ``receipt`` is present exactly when ``records`` is empty (UC-4).
+    """
 
     records: tuple[MedicationRecord, ...]
+    receipt: QueryReceipt | None = None
 
 
 class GetEncountersSinceOutput(ContractModel):
-    """Output of ``get_encounters_since``."""
+    """Output of ``get_encounters_since``.
+
+    ``truncated`` is True when the batch cap was hit — the cap is surfaced,
+    never silent (ARCHITECTURE.md section 6d). ``receipt`` is present
+    exactly when ``records`` is empty (UC-4).
+    """
 
     records: tuple[EncounterRecord, ...]
+    truncated: bool = False
+    receipt: QueryReceipt | None = None
 
 
 class SearchDocumentsOutput(ContractModel):
-    """Output of ``search_documents``."""
+    """Output of ``search_documents``.
+
+    ``receipt`` is present exactly when ``records`` is empty (UC-4).
+    """
 
     records: tuple[DocumentRecord, ...]
+    receipt: QueryReceipt | None = None
 
 
 class GetImmunizationsOutput(ContractModel):
-    """Output of ``get_immunizations``."""
+    """Output of ``get_immunizations``.
+
+    ``receipt`` is present exactly when ``records`` is empty (UC-4).
+    """
 
     records: tuple[ImmunizationRecord, ...]
+    receipt: QueryReceipt | None = None

@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
-from typing import Any, Awaitable, Callable
+from datetime import datetime, timezone
+from typing import Awaitable, Callable
 
 import httpx
 
@@ -31,7 +31,6 @@ from copilot.contracts.coverage import (
     CoverageUnavailable,
     CoverageVerifiedEmpty,
 )
-from copilot.contracts.refs import FhirResourceType, ResourceRef
 from copilot.contracts.tools import (
     AllergyRecord,
     ConditionRecord,
@@ -43,11 +42,20 @@ from copilot.contracts.tools import (
     PatientSnapshotOutput,
 )
 from copilot.fhir import FhirClient
+from copilot.tools.mapping import (
+    MEDICATION_SOURCE_PRESCRIPTIONS,
+    allergy_record_from,
+    condition_record_from,
+    encounter_record_from,
+    extract_records,
+    medication_record_from,
+    observation_record_from,
+    patient_record_from,
+)
 
 DEFAULT_SNAPSHOT_TIMEOUT_SECONDS = 30.0
 DEFAULT_LABS_TIMEOUT_SECONDS = 10.0
 LABS_COUNT_BOUND = 20
-MEDICATION_SOURCE_PRESCRIPTIONS = "prescriptions"
 
 # The six snapshot categories, in reporting order. Coverage output carries
 # exactly one entry per category on every call.
@@ -237,7 +245,7 @@ def build_default_fetchers(client: FhirClient) -> SnapshotFetchers:
 def _demographics_fetcher(client: FhirClient) -> CategoryFetcher:
     async def fetch(patient_id: str) -> CategoryFetchResult:
         resource = await client.read("Patient", patient_id)
-        record = _patient_record(resource)
+        record = patient_record_from(resource)
         return CategoryFetchResult(
             records=(record,) if record is not None else (),
             query_description=f"Patient/{patient_id}",
@@ -252,13 +260,11 @@ def _medications_fetcher(client: FhirClient) -> CategoryFetcher:
         result = await client.search(
             "MedicationRequest", {"patient": patient_id, "status": "active"}
         )
-        records = tuple(
-            record
-            for record in (
-                _medication_record(entry, source=MEDICATION_SOURCE_PRESCRIPTIONS)
-                for entry in result.entries
-            )
-            if record is not None
+        records = extract_records(
+            result.entries,
+            lambda resource: medication_record_from(
+                resource, source=MEDICATION_SOURCE_PRESCRIPTIONS
+            ),
         )
         return CategoryFetchResult(
             records=records,
@@ -277,11 +283,7 @@ def _medications_fetcher(client: FhirClient) -> CategoryFetcher:
 def _problems_fetcher(client: FhirClient) -> CategoryFetcher:
     async def fetch(patient_id: str) -> CategoryFetchResult:
         result = await client.search("Condition", {"patient": patient_id})
-        records = tuple(
-            record
-            for record in (_condition_record(entry) for entry in result.entries)
-            if record is not None
-        )
+        records = extract_records(result.entries, condition_record_from)
         return CategoryFetchResult(
             records=records,
             query_description=f"Condition?patient={patient_id}",
@@ -294,11 +296,7 @@ def _problems_fetcher(client: FhirClient) -> CategoryFetcher:
 def _allergies_fetcher(client: FhirClient) -> CategoryFetcher:
     async def fetch(patient_id: str) -> CategoryFetchResult:
         result = await client.search("AllergyIntolerance", {"patient": patient_id})
-        records = tuple(
-            record
-            for record in (_allergy_record(entry) for entry in result.entries)
-            if record is not None
-        )
+        records = extract_records(result.entries, allergy_record_from)
         return CategoryFetchResult(
             records=records,
             query_description=f"AllergyIntolerance?patient={patient_id}",
@@ -319,11 +317,9 @@ def _labs_fetcher(client: FhirClient) -> CategoryFetcher:
                 "_count": str(LABS_COUNT_BOUND),
             },
         )
-        records = tuple(
-            record
-            for record in (_observation_record(entry) for entry in result.entries)
-            if record is not None
-        )[:LABS_COUNT_BOUND]
+        records = extract_records(result.entries, observation_record_from)[
+            :LABS_COUNT_BOUND
+        ]
         return CategoryFetchResult(
             records=records,
             query_description=(
@@ -346,7 +342,7 @@ def _last_encounter_fetcher(client: FhirClient) -> CategoryFetcher:
         )
         records: tuple[OutputRecord, ...] = ()
         for entry in result.entries:
-            record = _encounter_record(entry)
+            record = encounter_record_from(entry)
             if record is not None:
                 records = (record,)
                 break
@@ -359,214 +355,3 @@ def _last_encounter_fetcher(client: FhirClient) -> CategoryFetcher:
         )
 
     return fetch
-
-
-# ---------------------------------------------------------------------------
-# FHIR resource -> record mapping
-# ---------------------------------------------------------------------------
-
-
-def _resource_id(resource: dict[str, Any]) -> str | None:
-    resource_id = resource.get("id")
-    if isinstance(resource_id, str) and resource_id:
-        return resource_id
-    return None
-
-
-def _codeable_text(concept: Any) -> str | None:
-    """Best-effort display text from a FHIR CodeableConcept."""
-    if not isinstance(concept, dict):
-        return None
-    text = concept.get("text")
-    if isinstance(text, str) and text:
-        return text
-    codings = concept.get("coding")
-    if isinstance(codings, list):
-        for coding in codings:
-            if isinstance(coding, dict):
-                display = coding.get("display")
-                if isinstance(display, str) and display:
-                    return display
-    return None
-
-
-def _codeable_code(concept: Any) -> str | None:
-    if not isinstance(concept, dict):
-        return None
-    codings = concept.get("coding")
-    if isinstance(codings, list):
-        for coding in codings:
-            if isinstance(coding, dict):
-                code = coding.get("code")
-                if isinstance(code, str) and code:
-                    return code
-    return None
-
-
-def _aware_datetime(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return None
-    return parsed
-
-
-def _patient_record(resource: dict[str, Any]) -> PatientRecord | None:
-    resource_id = _resource_id(resource)
-    if resource_id is None:
-        return None
-    name = _human_name(resource.get("name")) or "Unknown"
-    birth_raw = resource.get("birthDate")
-    birth_date: date | None = None
-    if isinstance(birth_raw, str) and birth_raw:
-        try:
-            birth_date = date.fromisoformat(birth_raw)
-        except ValueError:
-            birth_date = None
-    return PatientRecord(
-        ref=ResourceRef(
-            resource_type=FhirResourceType.PATIENT, resource_id=resource_id
-        ),
-        name=name,
-        birth_date=birth_date,
-    )
-
-
-def _human_name(names: Any) -> str | None:
-    if not isinstance(names, list):
-        return None
-    for name in names:
-        if not isinstance(name, dict):
-            continue
-        text = name.get("text")
-        if isinstance(text, str) and text:
-            return text
-        given = name.get("given")
-        given_parts = (
-            [part for part in given if isinstance(part, str) and part]
-            if isinstance(given, list)
-            else []
-        )
-        family = name.get("family")
-        parts = given_parts + (
-            [family] if isinstance(family, str) and family else []
-        )
-        if parts:
-            return " ".join(parts)
-    return None
-
-
-def _medication_record(
-    resource: dict[str, Any], *, source: str
-) -> MedicationRecord | None:
-    resource_id = _resource_id(resource)
-    if resource_id is None:
-        return None
-    medication = _codeable_text(resource.get("medicationCodeableConcept"))
-    if medication is None:
-        return None
-    status = resource.get("status")
-    return MedicationRecord(
-        ref=ResourceRef(
-            resource_type=FhirResourceType.MEDICATION_REQUEST,
-            resource_id=resource_id,
-        ),
-        medication=medication,
-        status=status if isinstance(status, str) and status else None,
-        source=source,
-    )
-
-
-def _condition_record(resource: dict[str, Any]) -> ConditionRecord | None:
-    resource_id = _resource_id(resource)
-    if resource_id is None:
-        return None
-    display = _codeable_text(resource.get("code"))
-    if display is None:
-        return None
-    return ConditionRecord(
-        ref=ResourceRef(
-            resource_type=FhirResourceType.CONDITION, resource_id=resource_id
-        ),
-        display=display,
-    )
-
-
-def _allergy_record(resource: dict[str, Any]) -> AllergyRecord | None:
-    resource_id = _resource_id(resource)
-    if resource_id is None:
-        return None
-    display = _codeable_text(resource.get("code"))
-    if display is None:
-        return None
-    return AllergyRecord(
-        ref=ResourceRef(
-            resource_type=FhirResourceType.ALLERGY_INTOLERANCE,
-            resource_id=resource_id,
-        ),
-        display=display,
-    )
-
-
-def _observation_record(resource: dict[str, Any]) -> ObservationRecord | None:
-    resource_id = _resource_id(resource)
-    if resource_id is None:
-        return None
-    code = _codeable_code(resource.get("code")) or _codeable_text(
-        resource.get("code")
-    )
-    display = _codeable_text(resource.get("code"))
-    if code is None or display is None:
-        return None
-    return ObservationRecord(
-        ref=ResourceRef(
-            resource_type=FhirResourceType.OBSERVATION, resource_id=resource_id
-        ),
-        code=code,
-        display=display,
-        value=_observation_value(resource),
-        effective=_aware_datetime(resource.get("effectiveDateTime")),
-    )
-
-
-def _observation_value(resource: dict[str, Any]) -> str | None:
-    quantity = resource.get("valueQuantity")
-    if isinstance(quantity, dict):
-        value = quantity.get("value")
-        unit = quantity.get("unit")
-        if isinstance(value, (int, float)):
-            if isinstance(unit, str) and unit:
-                return f"{value} {unit}"
-            return str(value)
-    value_string = resource.get("valueString")
-    if isinstance(value_string, str) and value_string:
-        return value_string
-    return None
-
-
-def _encounter_record(resource: dict[str, Any]) -> EncounterRecord | None:
-    resource_id = _resource_id(resource)
-    if resource_id is None:
-        return None
-    period = resource.get("period")
-    start = _aware_datetime(period.get("start")) if isinstance(period, dict) else None
-    if start is None:
-        return None
-    reason: str | None = None
-    reason_codes = resource.get("reasonCode")
-    if isinstance(reason_codes, list):
-        for concept in reason_codes:
-            reason = _codeable_text(concept)
-            if reason is not None:
-                break
-    return EncounterRecord(
-        ref=ResourceRef(
-            resource_type=FhirResourceType.ENCOUNTER, resource_id=resource_id
-        ),
-        start=start,
-        reason=reason,
-    )

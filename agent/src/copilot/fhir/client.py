@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
+
+SearchParams = Mapping[str, "str | Sequence[str]"]
 
 import httpx
 
@@ -108,17 +110,18 @@ class FhirClient:
     async def search(
         self,
         resource_type: str,
-        params: Mapping[str, str] | None = None,
+        params: SearchParams | None = None,
     ) -> SearchResult:
         """GET a search Bundle, transparently following ``next`` links.
 
-        Follows pagination up to the configured page cap; hitting the cap
-        with a ``next`` link still pending is surfaced via
-        ``SearchResult.truncated``.
+        A sequence-valued param is sent as a repeated query parameter
+        (e.g. ``date=ge...&date=le...``). Follows pagination up to the
+        configured page cap; hitting the cap with a ``next`` link still
+        pending is surfaced via ``SearchResult.truncated``.
         """
         entries: list[dict[str, Any]] = []
         next_url: str | None = f"/{resource_type}"
-        request_params: Mapping[str, str] | None = params
+        request_params: SearchParams | None = params
         pages_fetched = 0
 
         while next_url is not None:
@@ -143,7 +146,7 @@ class FhirClient:
         url: str,
         *,
         resource_type: str,
-        params: Mapping[str, str] | None = None,
+        params: SearchParams | None = None,
     ) -> Any:
         try:
             async with asyncio.timeout(self._timeout):
