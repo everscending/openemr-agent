@@ -5,6 +5,7 @@ description = "Clinical Co-Pilot agent service for OpenEMR"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
+    "pydantic>=2.13.4",
     "uvicorn>=0.30",
 ]
 
