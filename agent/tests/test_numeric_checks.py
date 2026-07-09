@@ -769,3 +769,159 @@ def test_probe_grounding_failure_takes_precedence_over_numeric() -> None:
 
     claim = only_claim(verdict)
     assert status_value(claim) == "stripped_unknown_citation"
+
+
+# ==========================================================================
+# Rev 2 (orchestrator-mandated tightening) — mask non-measurement numbers
+# ==========================================================================
+#
+# A bare integer in ordinary clinical prose (a diagnosis code, a disease
+# classifier, a bare year) is not a measurement and must never be compared
+# against a cited resource's valueQuantity. Deleting a true, correctly
+# grounded claim this way is worse than a missed check: T008 falls back to the
+# fallback text when no claim-bearing sentence survives, so a false strip on a
+# one-claim summary silently degrades an entire correct answer to "couldn't
+# verify."
+#
+# Every "survives" case below cites a resource that DOES carry a
+# *contradicting* valueQuantity (8.2 %) — this proves the number in the claim
+# text never reached the comparator at all, not merely that it reached the
+# comparator and happened to pass.
+
+
+def test_covid_19_hyphenated_compound_is_masked_and_survives() -> None:
+    refs = (ref("Condition", "c1"),)
+    res = (facts("Condition", "c1", value=Decimal("8.2"), unit="%"),)
+    verdict = verify(
+        "She was treated for COVID-19 [Condition/c1].", refs, resources=res
+    )
+    claim = only_claim(verdict)
+    assert status_value(claim) == VERIFIED
+    assert numeric_value(claim) == UNCHECKED
+
+
+def test_type_2_diabetes_classifier_number_is_masked_and_survives() -> None:
+    refs = (ref("Condition", "c1"),)
+    res = (facts("Condition", "c1", value=Decimal("8.2"), unit="%"),)
+    verdict = verify("She has Type 2 diabetes [Condition/c1].", refs, resources=res)
+    claim = only_claim(verdict)
+    assert status_value(claim) == VERIFIED
+    assert numeric_value(claim) == UNCHECKED
+
+
+def test_bare_diagnosis_year_is_masked_and_survives() -> None:
+    refs = (ref("Condition", "c1"),)
+    res = (facts("Condition", "c1", value=Decimal("8.2"), unit="%"),)
+    verdict = verify(
+        "She was diagnosed in 2019 [Condition/c1].", refs, resources=res
+    )
+    claim = only_claim(verdict)
+    assert status_value(claim) == VERIFIED
+    assert numeric_value(claim) == UNCHECKED
+
+
+def test_stage_classifier_number_is_masked_and_survives() -> None:
+    refs = (ref("Condition", "c1"),)
+    res = (facts("Condition", "c1", value=Decimal("8.2"), unit="%"),)
+    verdict = verify(
+        "She has stage 3 chronic kidney disease [Condition/c1].",
+        refs,
+        resources=res,
+    )
+    claim = only_claim(verdict)
+    assert status_value(claim) == VERIFIED
+    assert numeric_value(claim) == UNCHECKED
+
+
+def test_vitamin_b12_alphanumeric_token_survives() -> None:
+    # No hyphen; the digit run is directly attached to a letter ("B12"), which
+    # _QUANTITY_RE's own lookbehind already excludes from matching as a bare
+    # quantity to begin with — this pins that it keeps working post-masking.
+    refs = (ref("Condition", "c1"),)
+    res = (facts("Condition", "c1", value=Decimal("8.2"), unit="%"),)
+    verdict = verify(
+        "She has vitamin B12 deficiency [Condition/c1].", refs, resources=res
+    )
+    claim = only_claim(verdict)
+    assert status_value(claim) == VERIFIED
+    assert numeric_value(claim) == UNCHECKED
+
+
+# --- Self-devised additional masking cases (beyond the mandatory 5) ---
+
+
+def test_sars_cov_2_hyphenated_compound_is_masked_and_survives() -> None:
+    refs = (ref("Condition", "c1"),)
+    res = (facts("Condition", "c1", value=Decimal("8.2"), unit="%"),)
+    verdict = verify(
+        "She tested positive for SARS-CoV-2 [Condition/c1].", refs, resources=res
+    )
+    claim = only_claim(verdict)
+    assert status_value(claim) == VERIFIED
+    assert numeric_value(claim) == UNCHECKED
+
+
+def test_grade_classifier_number_is_masked_and_survives() -> None:
+    refs = (ref("Condition", "c1"),)
+    res = (facts("Condition", "c1", value=Decimal("8.2"), unit="%"),)
+    verdict = verify(
+        "The pathology showed grade 2 sarcoma [Condition/c1].",
+        refs,
+        resources=res,
+    )
+    claim = only_claim(verdict)
+    assert status_value(claim) == VERIFIED
+    assert numeric_value(claim) == UNCHECKED
+
+
+def test_phase_classifier_number_is_masked_and_survives() -> None:
+    refs = (ref("Condition", "c1"),)
+    res = (facts("Condition", "c1", value=Decimal("8.2"), unit="%"),)
+    verdict = verify(
+        "She is enrolled in a phase 2 trial [Condition/c1].", refs, resources=res
+    )
+    claim = only_claim(verdict)
+    assert status_value(claim) == VERIFIED
+    assert numeric_value(claim) == UNCHECKED
+
+
+def test_bare_year_with_adjacent_unit_still_compares_as_a_real_quantity() -> None:
+    # The "no adjacent unit" carve-out on the bare-year mask: a 4-digit number
+    # directly followed by a real unit is still a measurement candidate and is
+    # NOT masked — it is compared normally.
+    refs = (ref("Observation", "obs-1"),)
+    res = (facts("Observation", "obs-1", value=Decimal("2019"), unit="mg"),)
+    verdict = verify("Dose is 2019 mg [Observation/obs-1].", refs, resources=res)
+    claim = only_claim(verdict)
+    assert status_value(claim) == VERIFIED
+    assert numeric_value(claim) == CHECKED
+
+
+# --- Regression guards: masking must never launder a real contradiction ---
+# The bias is explicit: a false survive (a fabricated value passing) is more
+# dangerous than a false strip. Masking must never turn a genuine value
+# mismatch into `unchecked` — that would be a worse defect than the one it
+# fixes.
+
+
+def test_regression_percent_value_mismatch_still_strips() -> None:
+    refs = (ref("Observation", "obs-1"),)
+    res = (facts("Observation", "obs-1", value=Decimal("8.2"), unit="%"),)
+    verdict = verify("A1c is 7.1% [Observation/obs-1].", refs, resources=res)
+    assert status_value(only_claim(verdict)) == NUM_MISMATCH
+
+
+def test_regression_bare_value_mismatch_still_strips() -> None:
+    refs = (ref("Observation", "obs-1"),)
+    res = (facts("Observation", "obs-1", value=Decimal("8.2")),)
+    verdict = verify("A1c is 7.1 [Observation/obs-1].", refs, resources=res)
+    assert status_value(only_claim(verdict)) == NUM_MISMATCH
+
+
+def test_regression_nonconvertible_unit_mismatch_still_strips() -> None:
+    refs = (ref("Observation", "obs-1"),)
+    res = (facts("Observation", "obs-1", value=Decimal("150"), unit="mL"),)
+    verdict = verify(
+        "The dose is 150 mg [Observation/obs-1].", refs, resources=res
+    )
+    assert status_value(only_claim(verdict)) == NUM_MISMATCH
