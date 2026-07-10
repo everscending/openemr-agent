@@ -7,10 +7,24 @@ FastAPI's default handler turns that into a 422, never an unhandled 500.
 
 from __future__ import annotations
 
+from enum import Enum
+
 from pydantic import Field
 
 from copilot.contracts.base import ContractModel
+from copilot.contracts.tools import PatientSnapshotOutput
 from copilot.contracts.verification import VerificationCounts
+
+
+class DegradedReason(str, Enum):
+    """Why a reply is degraded — the LLM never answered (T012).
+
+    Backed (serialized to JSON) because it is the machine-readable marker a
+    client reads to switch the panel into non-AI mode. Distinct from the T010
+    ``FallbackReason`` axis: a response carries at most one of the two.
+    """
+
+    LLM_UNAVAILABLE = "llm_unavailable"
 
 
 class ChatRequest(ContractModel):
@@ -44,3 +58,11 @@ class ChatResponse(ContractModel):
     reply: str
     verification: VerificationCounts
     fallback: bool = False
+    #: Set only when the LLM never answered (T012). ``None`` on the answer and
+    #: on the T010-fallback paths — the two axes are mutually exclusive. Emitted
+    #: only when non-``None`` (the endpoint serializes with ``exclude_none``).
+    degraded: DegradedReason | None = None
+    #: The raw T005 structured snapshot rendered straight from FHIR when the LLM
+    #: is down on the first turn — no model involvement. ``None`` on every other
+    #: path (follow-up outages carry no non-AI rendering).
+    snapshot: PatientSnapshotOutput | None = None

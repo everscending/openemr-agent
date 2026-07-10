@@ -21,6 +21,29 @@ from pydantic import Field
 from copilot.contracts.base import ContractModel
 
 
+class LLMUnavailable(Exception):
+    """The LLM never answered — down, unreachable, or too slow (T012).
+
+    A distinct axis from :class:`~copilot.agent.loop.FallbackReason` (which names
+    a *model outcome* — the LLM answered but refused, truncated, or produced
+    unparseable output). ``LLMUnavailable`` means no answer was produced at all,
+    so the loop degrades to the non-AI structured snapshot.
+
+    These are plain exceptions defined in this pure module. The single SDK
+    adapter maps the vendor's error types onto them — **no vendor exception type
+    ever crosses this port**, so importing the loop pulls no ``anthropic``/
+    ``httpx`` (verified structurally in a clean subprocess).
+    """
+
+
+class LLMTimeout(LLMUnavailable):
+    """The per-call deadline elapsed before the LLM responded (loop-enforced)."""
+
+
+class LLMTransportError(LLMUnavailable):
+    """A transport/connection failure reaching the LLM provider."""
+
+
 class StopReason(str, Enum):
     """Why the LLM stopped — a closed set the loop matches exhaustively.
 

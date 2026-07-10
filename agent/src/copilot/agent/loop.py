@@ -26,6 +26,7 @@ Control flow the tests pin down:
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from collections.abc import Callable, Sequence
@@ -38,6 +39,8 @@ from copilot.agent.ports import (
     LLMClient,
     LLMMessage,
     LLMResponse,
+    LLMTimeout,
+    LLMUnavailable,
     StopReason,
 )
 from copilot.agent.tools import Tool, ToolRegistry
@@ -47,10 +50,17 @@ from copilot.agent.transcript import (
     TranscriptEntryKind,
 )
 from copilot.contracts.base import ContractModel
+from copilot.contracts.chat import DegradedReason
 from copilot.contracts.coverage import CategoryCoverage, CoverageUnavailable
 from copilot.contracts.refs import ResourceRef
+from copilot.contracts.tools import PatientSnapshotOutput
 from copilot.contracts.verification import VerificationVerdict
 from copilot.verification import verify_response
+
+#: Default per-LLM-call deadline (ARCHITECTURE.md §7). The loop abandons a hung
+#: call at this bound and degrades to the non-AI snapshot. A whole-run
+#: token/time budget is out of scope (T012 design decision).
+DEFAULT_LLM_TIMEOUT_SECONDS = 20.0
 
 # ---------------------------------------------------------------------------
 # Static system prompt — no per-request value (criterion 9 + 11)
@@ -139,10 +149,21 @@ class AgentResult(ContractModel):
     available_refs: tuple[ResourceRef, ...] = ()
     verdict: VerificationVerdict | None = None
     fallback: FallbackRequired | None = None
+    #: Set only when the LLM never answered (T012 non-AI fallback). Mutually
+    #: exclusive with ``fallback`` (the T010 model-outcome axis) and ``verdict``.
+    degraded: DegradedReason | None = None
+    #: The already-fetched snapshot to render on the degraded path, when a
+    #: ``get_patient_snapshot`` tool ran before the LLM failed — reused, never
+    #: refetched (criterion 3). ``None`` when no snapshot was captured.
+    snapshot: PatientSnapshotOutput | None = None
 
     @property
     def is_fallback(self) -> bool:
         return self.fallback is not None
+
+    @property
+    def is_degraded(self) -> bool:
+        return self.degraded is not None
 
     @property
     def output_text(self) -> str:
@@ -215,6 +236,7 @@ class AgentLoop:
         model: str,
         correlation_id: str | None = None,
         max_steps: int = 6,
+        llm_timeout: float = DEFAULT_LLM_TIMEOUT_SECONDS,
         system_prompt: str = SYSTEM_PROMPT,
         now: Callable[[], datetime] = _default_now,
         monotonic: Callable[[], float] = time.monotonic,
@@ -223,12 +245,15 @@ class AgentLoop:
             raise ValueError("patient_id is required")
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
+        if llm_timeout <= 0:
+            raise ValueError("llm_timeout must be positive")
         self._llm = llm
         self._registry = registry
         self._patient_id = patient_id
         self._model = model
         self._correlation_id = correlation_id or str(uuid.uuid4())
         self._max_steps = max_steps
+        self._llm_timeout = llm_timeout
         self._system_prompt = system_prompt
         self._now = now
         self._monotonic = monotonic
@@ -256,11 +281,18 @@ class AgentLoop:
         entries: list[TranscriptEntry] = []
         coverage: list[CategoryCoverage] = []
         refs: list[ResourceRef] = []
+        snapshots: list[PatientSnapshotOutput] = []
         consecutive_arg_failures = 0
         malformed_count = 0
 
         for _step in range(self._max_steps):
-            response = await self._call_llm(messages, entries)
+            try:
+                response = await self._call_llm(messages, entries)
+            except LLMUnavailable:
+                # The LLM never answered (down / unreachable / timed out). Degrade
+                # to the non-AI structured snapshot — no crash, no stack trace,
+                # reusing any snapshot a tool already fetched (criterion 3).
+                return self._degraded(entries, coverage, refs, snapshots)
 
             match response.stop_reason:
                 case StopReason.REFUSAL:
@@ -321,6 +353,7 @@ class AgentLoop:
                         entries,
                         coverage,
                         refs,
+                        snapshots,
                         consecutive_arg_failures,
                     )
                     consecutive_arg_failures = fallback.arg_failures
@@ -344,6 +377,7 @@ class AgentLoop:
         entries: list[TranscriptEntry],
         coverage: list[CategoryCoverage],
         refs: list[ResourceRef],
+        snapshots: list[PatientSnapshotOutput],
         arg_failures: int,
     ) -> _ToolCallOutcome:
         for call in response.tool_calls:
@@ -411,7 +445,7 @@ class AgentLoop:
             # Valid arguments — the consecutive-failure streak is broken.
             arg_failures = 0
             await self._execute_tool(
-                tool, validated, call.id, messages, entries, coverage, refs
+                tool, validated, call.id, messages, entries, coverage, refs, snapshots
             )
 
         return _ToolCallOutcome(arg_failures, None)
@@ -425,6 +459,7 @@ class AgentLoop:
         entries: list[TranscriptEntry],
         coverage: list[CategoryCoverage],
         refs: list[ResourceRef],
+        snapshots: list[PatientSnapshotOutput],
     ) -> None:
         started = self._now()
         t0 = self._monotonic()
@@ -453,6 +488,10 @@ class AgentLoop:
 
         duration = self._monotonic() - t0
         refs.extend(collect_refs(result))
+        # Capture the snapshot so a later LLM failure can render it without
+        # refetching (criterion 3); the last one wins if re-fetched by the model.
+        if isinstance(result, PatientSnapshotOutput):
+            snapshots.append(result)
         tool_coverage = getattr(result, "coverage", None)
         if tool_coverage:
             coverage.extend(tool_coverage)
@@ -475,11 +514,20 @@ class AgentLoop:
     ) -> LLMResponse:
         started = self._now()
         t0 = self._monotonic()
-        response = await self._llm.complete(
-            system=self._system_prompt,
-            messages=tuple(messages),
-            tools=self._registry.schemas(),
-        )
+        try:
+            # Per-call deadline enforced here (not per-conversation). ``wait_for``
+            # cancels the hung coroutine at the bound — it is never awaited to
+            # completion — and we raise the port's typed timeout (no vendor type).
+            response = await asyncio.wait_for(
+                self._llm.complete(
+                    system=self._system_prompt,
+                    messages=tuple(messages),
+                    tools=self._registry.schemas(),
+                ),
+                timeout=self._llm_timeout,
+            )
+        except TimeoutError as exc:
+            raise LLMTimeout("LLM call exceeded its deadline") from exc
         duration = self._monotonic() - t0
         entries.append(
             TranscriptEntry(
@@ -536,6 +584,23 @@ class AgentLoop:
             coverage=tuple(coverage),
             available_refs=tuple(refs),
             fallback=FallbackRequired(reason=reason, detail=detail),
+        )
+
+    def _degraded(
+        self,
+        entries: list[TranscriptEntry],
+        coverage: list[CategoryCoverage],
+        refs: list[ResourceRef],
+        snapshots: list[PatientSnapshotOutput],
+    ) -> AgentResult:
+        """The LLM never answered: a degraded result carrying any captured
+        snapshot. No ``FallbackReason`` and no verdict — a different axis."""
+        return AgentResult(
+            transcript=self._transcript(entries),
+            coverage=tuple(coverage),
+            available_refs=tuple(refs),
+            degraded=DegradedReason.LLM_UNAVAILABLE,
+            snapshot=snapshots[-1] if snapshots else None,
         )
 
 
