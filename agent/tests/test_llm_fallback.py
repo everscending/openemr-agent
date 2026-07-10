@@ -27,6 +27,13 @@ Design decisions pinned here:
 Production code (the taxonomy, the loop timeout/degraded path, the endpoint
 wiring) is referenced lazily inside test bodies so collection succeeds before
 the implementation exists (RED = the missing feature per test).
+
+Rev 2 (orchestrator-authorized, additive-only tightening): the original lock
+covered a degraded *follow-up* turn on an already-successful conversation, but
+never a degraded *first* turn's effect on conversation creation. A degraded
+first turn must still create the bound conversation record (with zero turns)
+so the returned ``conversation_id`` is not a phantom that 404s once the LLM
+recovers — the new tests at the bottom of this file pin that down.
 """
 
 from __future__ import annotations
@@ -34,7 +41,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -672,3 +679,205 @@ def test_normal_answer_path_is_untouched_by_the_fallback_wiring() -> None:
         "verification",
         "fallback",
     }
+
+
+# ==========================================================================
+# Rev 2 (orchestrator-mandated) — a degraded FIRST turn must not hand out a
+# phantom conversation_id: the bound record is created with zero turns.
+# ==========================================================================
+
+
+class FakeClock:
+    """A settable clock — injected wherever the store needs ``now()``."""
+
+    def __init__(self, start: datetime) -> None:
+        self._now = start
+
+    def __call__(self) -> datetime:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now = self._now + timedelta(seconds=seconds)
+
+
+def test_degraded_first_turn_conversation_id_resolves_after_recovery() -> None:
+    """Criterion 4: a first-turn outage must not mint a phantom conversation_id.
+    The same id must resolve immediately, and answer normally once the LLM
+    recovers on that same id."""
+    from copilot.conversation import InMemoryConversationStore
+
+    store = InMemoryConversationStore(ttl_seconds=3600)
+    registry = snapshot_only_registry(make_snapshot())
+    llm = ProgrammableLLM(
+        [
+            ports.LLMUnavailable("provider down"),
+            final("I reviewed the labs."),
+        ]
+    )
+    client = client_for(llm, registry, store=store)
+
+    first = client.post("/chat", json=chat_body("Catch me up."))
+    assert first.status_code == 200
+    body = first.json()
+    assert body["degraded"] == "llm_unavailable"
+    assert body["snapshot"] is not None
+    conv_id = body["conversation_id"]
+    assert conv_id
+
+    # Not a phantom: the id resolves in the store right away, before any
+    # follow-up request is even made.
+    assert store.get(conv_id) is not None
+
+    follow_up = client.post(
+        "/chat", json=chat_body("Now what?", conversation_id=conv_id)
+    )
+    assert follow_up.status_code == 200
+    assert follow_up.json()["conversation_id"] == conv_id
+    assert follow_up.json()["reply"] == "I reviewed the labs."
+    assert follow_up.json()["fallback"] is False
+    assert "degraded" not in follow_up.json()
+
+
+def test_degraded_first_turn_record_has_zero_turns_and_recovery_gets_no_history() -> None:
+    """The failed first turn is never appended: the record created for it has
+    zero turns, so the recovered follow-up's LLM call carries no prior history
+    at all — nothing to replay, because nothing succeeded yet."""
+    from copilot.conversation import InMemoryConversationStore
+
+    store = InMemoryConversationStore(ttl_seconds=3600)
+    registry = snapshot_only_registry(make_snapshot())
+    llm = ProgrammableLLM(
+        [
+            ports.LLMUnavailable("provider down"),
+            final("second turn reply"),
+        ]
+    )
+    client = client_for(llm, registry, store=store)
+
+    first = client.post("/chat", json=chat_body("Catch me up."))
+    conv_id = first.json()["conversation_id"]
+
+    record = store.get(conv_id)
+    assert record is not None
+    assert record.turns == ()  # zero turns — the degraded turn never landed
+
+    client.post("/chat", json=chat_body("Now what?", conversation_id=conv_id))
+
+    assert llm.call_count == 2
+    second_call_messages = llm.calls[1].messages
+    # Exactly this turn's user message — no assistant/user history replayed.
+    assert len(second_call_messages) == 1
+    assert second_call_messages[0].role == "user"
+    assert "Now what?" in second_call_messages[0].content
+    assert "Catch me up." not in second_call_messages[0].content
+
+
+def test_degraded_first_turn_scope_binding_is_live_from_creation() -> None:
+    """A follow-up on the degraded-created id with a different patient_id or a
+    different token returns the identical 404 as an unknown id — the binding
+    is enforced from the moment of creation, not only after a first success."""
+    registry = snapshot_only_registry(make_snapshot())
+    llm = ProgrammableLLM([ports.LLMUnavailable("provider down")])
+    client = client_for(llm, registry)
+
+    first = client.post(
+        "/chat", json=chat_body(patient_id="pat-1", token="token-A")
+    )
+    assert first.json()["degraded"] == "llm_unavailable"
+    conv_id = first.json()["conversation_id"]
+
+    unknown = client.post(
+        "/chat", json=chat_body(conversation_id="totally-unknown-id")
+    )
+    wrong_patient = client.post(
+        "/chat",
+        json=chat_body(
+            patient_id="pat-2", token="token-A", conversation_id=conv_id
+        ),
+    )
+    wrong_token = client.post(
+        "/chat",
+        json=chat_body(
+            patient_id="pat-1", token="token-B", conversation_id=conv_id
+        ),
+    )
+
+    for resp in (unknown, wrong_patient, wrong_token):
+        assert resp.status_code == 404
+
+    bodies = {unknown.text, wrong_patient.text, wrong_token.text}
+    assert len(bodies) == 1, bodies
+
+
+def test_degraded_first_turn_conversation_still_expires_on_ttl() -> None:
+    """My own probe: the record bound by a degraded first turn is a real,
+    TTL-governed entry, not a permanent exemption — it expires exactly like
+    any other conversation, driven by the injected clock, and the post-expiry
+    404 is byte-identical to the scope-mismatch 404s above."""
+    from copilot.conversation import InMemoryConversationStore
+
+    clock = FakeClock(AWARE)
+    store = InMemoryConversationStore(ttl_seconds=60, now=clock)
+    registry = snapshot_only_registry(make_snapshot())
+    llm = ProgrammableLLM([ports.LLMUnavailable("provider down")])
+    client = client_for(llm, registry, store=store)
+
+    first = client.post("/chat", json=chat_body())
+    assert first.json()["degraded"] == "llm_unavailable"
+    conv_id = first.json()["conversation_id"]
+    assert store.get(conv_id) is not None
+
+    clock.advance(61)  # one second past the 60s ttl
+
+    expired = client.post("/chat", json=chat_body(conversation_id=conv_id))
+    assert expired.status_code == 404
+    assert store.get(conv_id) is None  # deleted, not merely hidden
+
+    unknown = client.post(
+        "/chat", json=chat_body(conversation_id="totally-unknown-id")
+    )
+    assert unknown.status_code == 404
+    assert unknown.text == expired.text
+
+
+def test_two_consecutive_degraded_turns_never_accumulate_history() -> None:
+    """My own probe: a first-turn outage followed by a SECOND degraded turn
+    (still down) must not append either failed turn — the record stays at
+    zero turns throughout, and the second degraded response is shaped as a
+    follow-up (no snapshot), not re-treated as a first turn."""
+    from copilot.conversation import InMemoryConversationStore
+
+    store = InMemoryConversationStore(ttl_seconds=3600)
+    registry = snapshot_only_registry(make_snapshot())
+    llm = ProgrammableLLM(
+        [
+            ports.LLMUnavailable("provider down"),
+            ports.LLMUnavailable("still down"),
+            final("I reviewed the labs."),
+        ]
+    )
+    client = client_for(llm, registry, store=store)
+
+    first = client.post("/chat", json=chat_body("Catch me up."))
+    conv_id = first.json()["conversation_id"]
+    assert first.json()["snapshot"] is not None  # first-turn shape
+
+    second = client.post(
+        "/chat", json=chat_body("Still there?", conversation_id=conv_id)
+    )
+    assert second.status_code == 200
+    assert second.json()["degraded"] == "llm_unavailable"
+    assert second.json().get("snapshot") is None  # follow-up shape now
+
+    record = store.get(conv_id)
+    assert record is not None
+    assert record.turns == ()  # still zero — neither degraded turn landed
+
+    third = client.post(
+        "/chat", json=chat_body("Recovered?", conversation_id=conv_id)
+    )
+    assert third.status_code == 200
+    assert third.json()["reply"] == "I reviewed the labs."
+    assert llm.calls[2].messages == [
+        m for m in llm.calls[2].messages if m.role == "user"
+    ]  # no assistant turns were ever replayed — none existed to replay
