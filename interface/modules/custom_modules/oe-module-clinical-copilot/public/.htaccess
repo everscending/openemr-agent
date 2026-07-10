@@ -1,0 +1,7 @@
+## Clinical Co-Pilot audit-bridge public entry point.
+##
+## Apache does not expose the Authorization header to PHP's server vars outside
+## apis/ (which carries exactly this line). Without it, the module's
+## Symfony\Component\HttpFoundation\Request never sees the bearer token and
+## every request fails identically. See apis/.htaccess for the canonical use.
+SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1

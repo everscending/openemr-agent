@@ -179,6 +179,7 @@ async def _dispatch_audit(
     audit_bridge: AuditBridgeClient,
     audit_record: AuditInvocationRecord,
     sequence_recorder: Callable[[str], None],
+    user_token: str,
 ) -> None:
     """Background task: attempt one delivery. Never raises (T013 fail-open).
 
@@ -186,10 +187,13 @@ async def _dispatch_audit(
     Starlette ``BackgroundTasks`` entry, which executes only once the
     response body has been fully sent (JSON) or the stream generator has been
     exhausted (SSE). ``sequence_recorder`` is the test-only ordering seam
-    (criterion 4); production callers pass the no-op default.
+    (criterion 4); production callers pass the no-op default. ``user_token`` is
+    the acting user's raw bearer, forwarded to the bridge for attribution and
+    binding (T016) — it never leaves this call except as the outgoing
+    ``Authorization`` header.
     """
     sequence_recorder("audit_post_attempted")
-    await audit_bridge.deliver(audit_record)
+    await audit_bridge.deliver(audit_record, user_token=user_token)
 
 
 def _default_clock() -> datetime:
@@ -549,6 +553,7 @@ def create_app(
                 resolved_audit_bridge,
                 audit_record,
                 resolved_audit_sequence_recorder,
+                chat_request.token,
             )
 
         if stream:

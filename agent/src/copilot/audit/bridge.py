@@ -96,8 +96,21 @@ class AuditBridgeClient:
         """Release the underlying HTTP connection pool."""
         await self._client.aclose()
 
-    async def deliver(self, record: AuditInvocationRecord) -> None:
+    async def deliver(
+        self, record: AuditInvocationRecord, *, user_token: str | None = None
+    ) -> None:
         """Attempt one delivery. Never raises; never blocks past ``timeout``.
+
+        The POST carries ``Authorization: Bearer <user_token>`` — the acting
+        user's raw bearer, which OpenEMR's audit-bridge (T016) resolves to the
+        human named in the decision log and binding-checks against the record's
+        ``user_token_hash``. The raw token is *never* stored on the record,
+        logged, put in the alert, or placed on a span; only its sha256 hash
+        (already inside the record body) is durable.
+
+        A missing/empty ``user_token`` means the module could not attribute the
+        record, so no POST is made: it is counted as a failure and the one alert
+        is emitted, preserving fail-open (this method still returns normally).
 
         Success (2xx) increments the success counter. Every other outcome —
         non-2xx, timeout, connection refused, or any other transport error —
@@ -106,12 +119,18 @@ class AuditBridgeClient:
         and either the HTTP status or the exception's *type name* — never
         the record body, an exception message, or response text.
         """
+        if not user_token:
+            self._fail(record.correlation_id)
+            return
         try:
             async with asyncio.timeout(self._timeout):
                 response = await self._client.post(
                     self._url,
                     content=record.model_dump_json(),
-                    headers={"Content-Type": "application/json"},
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {user_token}",
+                    },
                 )
         except (TimeoutError, httpx.TimeoutException) as exc:
             self._fail(record.correlation_id, exception=exc)
