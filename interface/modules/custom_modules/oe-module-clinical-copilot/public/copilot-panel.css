@@ -1,0 +1,134 @@
+/*
+ * Clinical Co-Pilot panel styling (T019).
+ *
+ * Reuses OpenEMR/Bootstrap 4 native classes (.card, .card-body, .card-title,
+ * .btn/.btn-primary, .form-control/.input-group) for the panel chrome so it
+ * looks native. Custom CSS here is limited to the genuinely chat-specific
+ * parts: the message bubbles, the scrollable message-list region, and the
+ * left/right column split -- all scoped under #copilot-panel / .oe-copilot__*
+ * (BEM-ish) or the specific compound selector #container_div.oe-copilot__split-container,
+ * never a bare/generic element selector, so this never clobbers or leaks into
+ * OpenEMR's own styles.
+ */
+
+#container_div.oe-copilot__split-container {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+}
+
+.oe-copilot__dashboard-left {
+    flex: 1 1 70%;
+    min-width: 0;
+}
+
+/*
+ * The dashboard's Bootstrap top nav (.navbar-expand-md > .navbar-nav) decides
+ * whether to show its full horizontal menu or collapse to a hamburger based
+ * on the *viewport* width (a media query), not the width of whatever
+ * container it sits in. Wrapping the whole dashboard into this narrower left
+ * column means there is a viewport-width range where Bootstrap still shows
+ * the full horizontal menu (viewport >= 768px) even though this column is now
+ * too narrow for it -- so with the default flex-wrap:nowrap the nav items
+ * overflow sideways and spill under the sticky co-pilot panel. Forcing wrap
+ * here, scoped to only when our split is active, makes it wrap onto
+ * additional lines within the column instead of overflowing. Bootstrap's own
+ * <768px collapse-to-hamburger behavior is untouched.
+ */
+#container_div.oe-copilot__split-container .navbar-nav {
+    flex-wrap: wrap;
+    row-gap: 0.25rem;
+}
+
+#copilot-panel.oe-copilot__panel {
+    flex: 1 1 30%;
+    min-width: 280px;
+    max-width: 560px;
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 0.5rem;
+    align-self: flex-start;
+    /*
+     * Fill the browser VIEWPORT height (not the page/dashboard height): with
+     * position:sticky the panel stays pinned to the top of the window as the
+     * (often much taller) left dashboard column scrolls, and this height makes
+     * its bottom reach the bottom of the window. 1rem leaves the 0.5rem sticky
+     * top gap plus a matching gap at the bottom.
+     */
+    height: calc(100vh - 1rem);
+    max-height: calc(100vh - 1rem);
+}
+
+#copilot-panel .oe-copilot__card-body {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    /*
+     * Bootstrap's .card-body ships 1.25rem (20px) padding with no utility
+     * class landing on exactly 10px (.p-2 is 8px, .p-3 is 16px), so this
+     * scoped override -- not a bare .card-body selector -- is intentional.
+     */
+    padding: 10px;
+}
+
+#copilot-panel .oe-copilot__title {
+    flex: 0 0 auto;
+}
+
+#copilot-panel .oe-copilot__message-list {
+    /*
+     * Grow to fill whatever vertical space the now-full-height panel leaves
+     * after the title and input row. min-height:0 lets a flex child shrink
+     * below its content size so its own overflow-y scroll engages instead of
+     * pushing the input off-screen; no max-height cap, so it uses the full
+     * viewport-height panel.
+     *
+     * A flex column (rather than plain block flow) is what lets each bubble
+     * below size itself to its own content (width: fit-content) instead of
+     * stretching to fill the row -- a block-level div has no such notion of
+     * "shrink to content" while still being independently alignable per
+     * message. align-items: flex-start is the default (agent-side) placement;
+     * the user variant below overrides its own align-self to sit on the
+     * right instead.
+     */
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    overflow-y: auto;
+    border: 1px solid rgba(0, 0, 0, 0.125);
+    border-radius: 0.25rem;
+    padding: 0.5rem;
+    margin-bottom: 0.75rem;
+    background-color: #ffffff;
+}
+
+#copilot-panel .oe-copilot__bubble {
+    padding: 0.4rem 0.6rem;
+    margin-bottom: 0.4rem;
+    border-radius: 0.75rem;
+    /* Shrink-to-content width (never full-row), capped so a long message
+       still wraps instead of spanning the whole list. */
+    width: fit-content;
+    max-width: 90%;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+}
+
+#copilot-panel .oe-copilot__bubble--user {
+    background-color: #e7f1ff;
+    align-self: flex-end;
+    border-bottom-right-radius: 0.15rem;
+}
+
+#copilot-panel .oe-copilot__bubble--agent {
+    background-color: #f1f3f5;
+    align-self: flex-start;
+    border-bottom-left-radius: 0.15rem;
+}
+
+#copilot-panel .oe-copilot__input-group {
+    flex: 0 0 auto;
+}
