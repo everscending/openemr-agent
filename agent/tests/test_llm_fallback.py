@@ -843,8 +843,18 @@ def test_degraded_first_turn_conversation_still_expires_on_ttl() -> None:
 def test_two_consecutive_degraded_turns_never_accumulate_history() -> None:
     """My own probe: a first-turn outage followed by a SECOND degraded turn
     (still down) must not append either failed turn — the record stays at
-    zero turns throughout, and the second degraded response is shaped as a
-    follow-up (no snapshot), not re-treated as a first turn."""
+    zero turns throughout.
+
+    Rev 3 correction: this test originally asserted the second (retry)
+    response carried no snapshot, on the theory that a repeat request against
+    an existing id is automatically a "follow-up." That was wrong — a
+    conversation still at zero stored turns has no prior context either, so a
+    retry into it is semantically still a first turn and must render the
+    snapshot again (a clinician who retries during an outage must not watch
+    the med list vanish). The corrected assertion below matches the
+    turn-count rule now implemented; nothing here is weakened, the prior
+    (incorrect) expectation is replaced by the newly-authoritative one.
+    """
     from copilot.conversation import InMemoryConversationStore
 
     store = InMemoryConversationStore(ttl_seconds=3600)
@@ -867,7 +877,12 @@ def test_two_consecutive_degraded_turns_never_accumulate_history() -> None:
     )
     assert second.status_code == 200
     assert second.json()["degraded"] == "llm_unavailable"
-    assert second.json().get("snapshot") is None  # follow-up shape now
+    # Rev 3: the conversation still has zero stored turns, so the retry is
+    # semantically still a first turn — the snapshot renders again, with
+    # coverage intact, exactly as on the first attempt.
+    second_snapshot = second.json().get("snapshot")
+    assert second_snapshot is not None
+    assert len(second_snapshot["coverage"]) == 6
 
     record = store.get(conv_id)
     assert record is not None
@@ -881,3 +896,128 @@ def test_two_consecutive_degraded_turns_never_accumulate_history() -> None:
     assert llm.calls[2].messages == [
         m for m in llm.calls[2].messages if m.role == "user"
     ]  # no assistant turns were ever replayed — none existed to replay
+
+
+# ==========================================================================
+# Rev 3 (orchestrator-mandated) — snapshot render is keyed on conversation
+# state (zero stored turns), not on request shape (whether conversation_id
+# was supplied). A retry into an outage must not make the snapshot vanish.
+# ==========================================================================
+
+
+def test_degraded_retry_on_a_zero_turn_conversation_still_renders_snapshot() -> None:
+    """Item 1: a degraded first turn, then a degraded retry on the SAME id —
+    both carry the snapshot, with coverage intact. The clinician's natural
+    action during an outage (retry) must not take the data away."""
+    from copilot.conversation import InMemoryConversationStore
+
+    store = InMemoryConversationStore(ttl_seconds=3600)
+    registry = snapshot_only_registry(make_snapshot())
+    llm = ProgrammableLLM(
+        [
+            ports.LLMUnavailable("provider down"),
+            ports.LLMUnavailable("provider still down"),
+        ]
+    )
+    client = client_for(llm, registry, store=store)
+
+    first = client.post("/chat", json=chat_body("Catch me up."))
+    assert first.status_code == 200
+    first_body = first.json()
+    assert first_body["degraded"] == "llm_unavailable"
+    assert first_body["snapshot"] is not None
+    categories_1 = {c["category"] for c in first_body["snapshot"]["coverage"]}
+    assert categories_1 == set(EXPECTED_CATEGORIES)
+    conv_id = first_body["conversation_id"]
+
+    retry = client.post(
+        "/chat", json=chat_body("Catch me up.", conversation_id=conv_id)
+    )
+    assert retry.status_code == 200
+    retry_body = retry.json()
+    assert retry_body["degraded"] == "llm_unavailable"
+    assert retry_body["snapshot"] is not None  # still rendered — not vanished
+    categories_2 = {c["category"] for c in retry_body["snapshot"]["coverage"]}
+    assert categories_2 == set(EXPECTED_CATEGORIES)
+
+    # Still a bound, zero-turn conversation — no history accumulated.
+    record = store.get(conv_id)
+    assert record is not None
+    assert record.turns == ()
+
+
+def test_snapshot_presence_boundary_is_turn_count_not_conversation_id_presence() -> None:
+    """Item 2: pin both sides of the boundary in one test. A brand-new
+    conversation's degraded turn (and its degraded retry) renders the
+    snapshot; the SAME conversation, once it has one successful turn behind
+    it, drops the snapshot on a later outage — that's criterion 4's actual
+    "no meaningful non-AI rendering" case, not "was conversation_id supplied."
+    """
+    from copilot.conversation import InMemoryConversationStore
+
+    store = InMemoryConversationStore(ttl_seconds=3600)
+    registry = snapshot_only_registry(make_snapshot())
+    llm = ProgrammableLLM(
+        [
+            ports.LLMUnavailable("provider down"),  # zero turns -> snapshot
+            final("I reviewed the labs."),  # now the conversation has 1 turn
+            ports.LLMUnavailable("provider down again"),  # has-turns -> no snapshot
+        ]
+    )
+    client = client_for(llm, registry, store=store)
+
+    zero_turn_degraded = client.post("/chat", json=chat_body("Catch me up."))
+    conv_id = zero_turn_degraded.json()["conversation_id"]
+    assert zero_turn_degraded.json()["snapshot"] is not None  # side A: zero turns
+
+    recovered = client.post(
+        "/chat", json=chat_body("Catch me up.", conversation_id=conv_id)
+    )
+    assert recovered.json()["reply"] == "I reviewed the labs."
+    assert store.get(conv_id).turns  # now has >= 1 stored turn
+
+    has_turn_degraded = client.post(
+        "/chat", json=chat_body("What now?", conversation_id=conv_id)
+    )
+    assert has_turn_degraded.status_code == 200
+    assert has_turn_degraded.json()["degraded"] == "llm_unavailable"
+    assert has_turn_degraded.json().get("snapshot") is None  # side B: has turns
+
+
+def test_repeated_degraded_follow_ups_after_a_success_never_resurrect_the_snapshot() -> None:
+    """My own probe around the boundary: once a conversation has crossed into
+    "has turns," repeated subsequent outages must not fall back to rendering
+    the snapshot again — the boundary is one-directional (turns only ever
+    accumulate, never reset to zero), so nothing after the first success ever
+    re-triggers the zero-turn/first-turn snapshot path."""
+    from copilot.conversation import InMemoryConversationStore
+
+    store = InMemoryConversationStore(ttl_seconds=3600)
+    registry = snapshot_only_registry(make_snapshot())
+    llm = ProgrammableLLM(
+        [
+            final("I reviewed the labs."),  # 1 turn now stored
+            ports.LLMUnavailable("down"),
+            ports.LLMUnavailable("still down"),
+            ports.LLMUnavailable("still still down"),
+        ]
+    )
+    client = client_for(llm, registry, store=store)
+
+    first = client.post("/chat", json=chat_body("Catch me up."))
+    conv_id = first.json()["conversation_id"]
+    assert "snapshot" not in first.json()  # a successful turn never carries one
+
+    for message in ("outage 1", "outage 2", "outage 3"):
+        resp = client.post(
+            "/chat", json=chat_body(message, conversation_id=conv_id)
+        )
+        assert resp.status_code == 200
+        assert resp.json()["degraded"] == "llm_unavailable"
+        assert resp.json().get("snapshot") is None  # never resurrected
+
+    # The one real turn is still the only one stored — none of the three
+    # outages were appended.
+    record = store.get(conv_id)
+    assert record is not None
+    assert len(record.turns) == 2  # user + assistant from the one success
