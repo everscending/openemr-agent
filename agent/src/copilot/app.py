@@ -21,12 +21,13 @@ from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timezone
 from typing import Mapping
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from copilot.agent.loop import DEFAULT_LLM_TIMEOUT_SECONDS, AgentLoop, AgentResult
 from copilot.agent.ports import LLMClient, LLMMessage
 from copilot.agent.tools import ToolRegistry
+from copilot.audit import AuditBridgeClient, AuditInvocationRecord, AuditOutcome
 from copilot.contracts.chat import ChatRequest, ChatResponse, DegradedReason
 from copilot.contracts.tools import GetPatientSnapshotInput, PatientSnapshotOutput
 from copilot.contracts.verification import VerificationCounts
@@ -72,9 +73,103 @@ _ZERO_COUNTS = VerificationCounts(
 #: from "exists but isn't yours" (an existence oracle over PHI).
 _CONVERSATION_NOT_FOUND_DETAIL = "conversation not found"
 
+#: T013/ARCHITECTURE.md §7: the audit-bridge endpoint URL (T016, PHP side, out
+#: of scope here). Unset in most environments today (the module endpoint does
+#: not exist yet) — omitted, audit dispatch is simply disabled, never a
+#: startup failure: fail-open extends to configuration absence too.
+AUDIT_BRIDGE_URL_ENV = "AUDIT_BRIDGE_URL"
+
 
 def _conversation_not_found() -> HTTPException:
     return HTTPException(status_code=404, detail=_CONVERSATION_NOT_FOUND_DETAIL)
+
+
+def _noop_sequence_recorder(event: str) -> None:
+    """Default no-op audit ordering hook — tests inject a real recorder."""
+    return None
+
+
+def _default_audit_bridge() -> AuditBridgeClient | None:
+    base_url = os.environ.get(AUDIT_BRIDGE_URL_ENV)
+    if not base_url:
+        return None
+    return AuditBridgeClient(base_url=base_url)
+
+
+def _build_audit_record(
+    *,
+    user_token_hash: str,
+    patient_id: str,
+    correlation_id: str,
+    conversation_id: str,
+    occurred_at: datetime,
+    result: AgentResult,
+) -> AuditInvocationRecord:
+    """The one invocation record for a completed turn (T013, criterion 1).
+
+    ``result`` alone determines the three mutually-exclusive outcome shapes:
+    T012 degraded (the LLM never answered), T010 fallback (refusal/malformed/
+    tool-args/step-cap), or answered (a verdict was returned — including the
+    verification layer's *own* fallback-triggered path, T008/T009: that is
+    still an answered turn from the loop's perspective, distinguished only by
+    its ``claims_*`` counts, never conflated with the T010 axis).
+    """
+    if result.is_degraded:
+        return AuditInvocationRecord(
+            user_token_hash=user_token_hash,
+            patient_id=patient_id,
+            correlation_id=correlation_id,
+            conversation_id=conversation_id,
+            occurred_at=occurred_at,
+            claims_total=0,
+            claims_passed=0,
+            claims_stripped=0,
+            outcome=AuditOutcome.DEGRADED,
+            degraded=result.degraded,
+        )
+    if result.is_fallback:
+        assert result.fallback is not None  # narrows for the type checker
+        return AuditInvocationRecord(
+            user_token_hash=user_token_hash,
+            patient_id=patient_id,
+            correlation_id=correlation_id,
+            conversation_id=conversation_id,
+            occurred_at=occurred_at,
+            claims_total=0,
+            claims_passed=0,
+            claims_stripped=0,
+            outcome=AuditOutcome.FALLBACK,
+            fallback_reason=result.fallback.reason,
+        )
+    counts = result.verdict.counts if result.verdict is not None else _ZERO_COUNTS
+    return AuditInvocationRecord(
+        user_token_hash=user_token_hash,
+        patient_id=patient_id,
+        correlation_id=correlation_id,
+        conversation_id=conversation_id,
+        occurred_at=occurred_at,
+        claims_total=counts.claims_total,
+        claims_passed=counts.claims_passed,
+        claims_stripped=counts.claims_stripped,
+        outcome=AuditOutcome.ANSWERED,
+    )
+
+
+async def _dispatch_audit(
+    audit_bridge: AuditBridgeClient,
+    audit_record: AuditInvocationRecord,
+    sequence_recorder: Callable[[str], None],
+) -> None:
+    """Background task: attempt one delivery. Never raises (T013 fail-open).
+
+    Runs strictly after the response has been finalized — attached as a
+    Starlette ``BackgroundTasks`` entry, which executes only once the
+    response body has been fully sent (JSON) or the stream generator has been
+    exhausted (SSE). ``sequence_recorder`` is the test-only ordering seam
+    (criterion 4); production callers pass the no-op default.
+    """
+    sequence_recorder("audit_post_attempted")
+    await audit_bridge.deliver(audit_record)
 
 
 def _default_clock() -> datetime:
@@ -110,8 +205,18 @@ def _sse_frame(event: str, data: dict[str, object]) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode("utf-8")
 
 
-async def _sse_stream(payload: ChatResponse) -> AsyncIterator[bytes]:
-    """The buffered SSE frame sequence: meta, then verified text, then verdict."""
+async def _sse_stream(
+    payload: ChatResponse,
+    *,
+    on_finalized: Callable[[], None] = lambda: None,
+) -> AsyncIterator[bytes]:
+    """The buffered SSE frame sequence: meta, then verified text, then verdict.
+
+    ``on_finalized`` fires only once the last (verdict) frame has been handed
+    off to the caller — i.e. after Starlette has already sent it and resumes
+    this generator to ask for the next item (T013 criterion 4: "after the
+    last frame is emitted", not merely constructed).
+    """
     yield _sse_frame(
         "meta",
         {
@@ -130,6 +235,7 @@ async def _sse_stream(payload: ChatResponse) -> AsyncIterator[bytes]:
     if payload.degraded is not None:
         verdict_data["degraded"] = payload.degraded.value
     yield _sse_frame("verdict", verdict_data)
+    on_finalized()
 
 
 async def _fetch_snapshot_no_llm(
@@ -205,6 +311,8 @@ def create_app(
     conversation_store: ConversationStore | None = None,
     conversation_ttl_seconds: float = 2 * 60 * 60,
     clock: Callable[[], datetime] = _default_clock,
+    audit_bridge: AuditBridgeClient | None = None,
+    audit_sequence_recorder: Callable[[str], None] | None = None,
 ) -> FastAPI:
     """Build and return the Co-Pilot FastAPI application.
 
@@ -221,7 +329,13 @@ def create_app(
     fake for both, so the suite makes no network call. ``conversation_store``
     is the Redis-shaped state backend; omitted, an in-process store is built
     from ``conversation_ttl_seconds`` (default 2h, ARCHITECTURE.md §7) and
-    ``clock`` (an injected clock, for deterministic TTL tests).
+    ``clock`` (an injected clock, for deterministic TTL tests). ``audit_bridge``
+    is the T013 audit-bridge client; omitted, one is built from the
+    ``AUDIT_BRIDGE_URL`` env var if set, else audit dispatch is disabled
+    (ARCHITECTURE.md §7's fail-open extends to missing configuration — this
+    never blocks ``/chat``). ``audit_sequence_recorder`` is a test-only
+    ordering seam (default a no-op) asserting ``response_finalized`` precedes
+    ``audit_post_attempted``.
     """
     install_correlation_log_record_factory()
 
@@ -240,6 +354,14 @@ def create_app(
         conversation_store
         if conversation_store is not None
         else InMemoryConversationStore(ttl_seconds=conversation_ttl_seconds, now=clock)
+    )
+    resolved_audit_bridge: AuditBridgeClient | None = (
+        audit_bridge if audit_bridge is not None else _default_audit_bridge()
+    )
+    resolved_audit_sequence_recorder: Callable[[str], None] = (
+        audit_sequence_recorder
+        if audit_sequence_recorder is not None
+        else _noop_sequence_recorder
     )
 
     app = FastAPI(title="Clinical Co-Pilot Agent")
@@ -346,13 +468,46 @@ def create_app(
                 fallback=result.is_fallback,
             )
 
-        if stream:
-            return StreamingResponse(
-                _sse_stream(payload), media_type="text/event-stream"
+        # T013: one audit-bridge invocation record per completed turn (this
+        # point is only reached once validation and scope binding already
+        # succeeded — a 422 or a 404 returns/raises long before here, so
+        # neither ever produces a record). Built from `result` directly,
+        # covering all three completed-turn shapes: degraded, T010 fallback,
+        # and answered (including the verifier's own fallback-triggered path).
+        background_tasks = BackgroundTasks()
+        if resolved_audit_bridge is not None:
+            audit_record = _build_audit_record(
+                user_token_hash=token_hash,
+                patient_id=record.patient_id,
+                correlation_id=correlation_id,
+                conversation_id=conversation_id,
+                occurred_at=clock(),
+                result=result,
             )
+            background_tasks.add_task(
+                _dispatch_audit,
+                resolved_audit_bridge,
+                audit_record,
+                resolved_audit_sequence_recorder,
+            )
+
+        if stream:
+
+            def _on_sse_finalized() -> None:
+                resolved_audit_sequence_recorder("response_finalized")
+
+            return StreamingResponse(
+                _sse_stream(payload, on_finalized=_on_sse_finalized),
+                media_type="text/event-stream",
+                background=background_tasks,
+            )
+
+        content = payload.model_dump(mode="json", exclude_none=True)
+        resolved_audit_sequence_recorder("response_finalized")
         return JSONResponse(
             status_code=200,
-            content=payload.model_dump(mode="json", exclude_none=True),
+            content=content,
+            background=background_tasks,
         )
 
     return app
