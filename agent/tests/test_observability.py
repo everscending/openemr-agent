@@ -432,9 +432,20 @@ def test_correlation_id_present_on_every_span_and_every_log_record(
 ) -> None:
     exporter = InMemorySpanExporter()
     tracer = build_tracer(exporter)
-    tool = make_tool("search_observations")
+    # A failing tool call plus a subsequent answered turn exercises two
+    # distinct `copilot.*` loggers in one request (`copilot.agent.loop`'s
+    # tool-failure warning and `copilot.observability`'s completion log) —
+    # deliberately, so the service-logger filter below can't vacuously pass
+    # by matching zero or one record.
+    tool = make_tool(
+        "search_observations",
+        raises=FhirNotFound("nf", resource_type="Observation", status_code=404),
+    )
     llm = ScriptedLLM(
-        [tool_use("search_observations", {}), final("Reviewed [Observation/obs-1].")]
+        [
+            tool_use("search_observations", {}),
+            final("The observation is unavailable, please view source records."),
+        ]
     )
     client = make_client(llm, tools=(tool,), tracer=tracer)
 
@@ -449,9 +460,21 @@ def test_correlation_id_present_on_every_span_and_every_log_record(
     for s in spans:
         assert s.attributes.get("correlation_id") == "corr-fixed-777", s.name
 
-    assert len(caplog.records) >= 1
-    for record in caplog.records:
+    # Every record *our own service* emitted (never third-party library
+    # noise, e.g. the test harness's own `httpx` client logging its outbound
+    # call to the ASGI app) carries the correlation ID.
+    service_records = [
+        r for r in caplog.records if r.name == "copilot" or r.name.startswith("copilot.")
+    ]
+    assert len(service_records) >= 1
+    for record in service_records:
         assert getattr(record, "correlation_id", None) == "corr-fixed-777"
+
+    # The filter itself must not be able to vacuously pass by degenerating to
+    # a single logger — assert at least two distinct `copilot.*` loggers were
+    # actually captured.
+    distinct_loggers = {r.name for r in service_records}
+    assert len(distinct_loggers) >= 2, distinct_loggers
 
 
 # ==========================================================================
@@ -544,6 +567,7 @@ def test_tool_typed_error_sets_error_type_with_no_message_event_or_url(
     err = FhirNotFound(
         f"Observation not found at {leaked_url}",
         resource_type="Observation",
+        status_code=404,
         url=leaked_url,
     )
     tool = make_tool("search_observations", raises=err)
@@ -654,7 +678,7 @@ def test_metrics_endpoint_counts_tool_failures_and_carries_no_request_scoped_dat
     metrics = metrics_mod().TelemetryMetrics()
     tool = make_tool(
         "search_observations",
-        raises=FhirNotFound("nf", resource_type="Observation"),
+        raises=FhirNotFound("nf", resource_type="Observation", status_code=404),
     )
     llm = ScriptedLLM(
         [
