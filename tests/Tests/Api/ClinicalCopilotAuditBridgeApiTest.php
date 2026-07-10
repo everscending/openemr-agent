@@ -52,8 +52,11 @@ class ClinicalCopilotAuditBridgeApiTest extends TestCase
             "SELECT `pid`, `uuid` FROM `patient_data` WHERE `pubpid` LIKE ? ORDER BY `pid` DESC LIMIT 1",
             [FixtureManager::PATIENT_FIXTURE_PUBPID_PREFIX . "%"]
         );
-        $this->patientPid = (int) $patientRow['pid'];
-        $this->patientUuidString = UuidRegistry::uuidToString($patientRow['uuid']);
+        if (!is_array($patientRow)) {
+            throw new \RuntimeException('Expected a patient fixture row.');
+        }
+        $this->patientPid = $this->asInt($patientRow['pid']);
+        $this->patientUuidString = UuidRegistry::uuidToString($this->asString($patientRow['uuid']));
 
         $this->activateModule(1);
     }
@@ -152,7 +155,32 @@ class ClinicalCopilotAuditBridgeApiTest extends TestCase
     }
 
     /**
-     * @return array<string, mixed>|null
+     * Narrow a mixed database-row value to int. Throws (fail-closed) if the
+     * value is not numeric, so an unexpected shape surfaces as a test failure
+     * rather than a silent (int) coercion of garbage.
+     */
+    private function asInt(mixed $value): int
+    {
+        if (!is_numeric($value)) {
+            throw new \RuntimeException('Expected a numeric database value.');
+        }
+        return (int) $value;
+    }
+
+    /**
+     * Narrow a mixed database-row value to string. Throws (fail-closed) if the
+     * value is not scalar.
+     */
+    private function asString(mixed $value): string
+    {
+        if (!is_scalar($value)) {
+            throw new \RuntimeException('Expected a scalar database value.');
+        }
+        return (string) $value;
+    }
+
+    /**
+     * @return array<mixed>|null
      */
     private function latestAuditRow(): ?array
     {
@@ -165,7 +193,7 @@ class ClinicalCopilotAuditBridgeApiTest extends TestCase
     }
 
     /**
-     * @return array<string, mixed>|null
+     * @return array<mixed>|null
      */
     private function latestDisclosureRow(): ?array
     {
@@ -278,8 +306,8 @@ class ClinicalCopilotAuditBridgeApiTest extends TestCase
         $this->assertNotNull($logRow);
         $this->assertSame(self::EVENT_TYPE, $logRow['event']);
         $this->assertSame('admin', $logRow['user']);
-        $this->assertSame($this->patientPid, (int) $logRow['patient_id']);
-        $this->assertSame(1, (int) $logRow['success']);
+        $this->assertSame($this->patientPid, $this->asInt($logRow['patient_id']));
+        $this->assertSame(1, $this->asInt($logRow['success']));
         $this->assertSame('clinical-copilot', $logRow['log_from']);
 
         $expectedComments = json_encode([
@@ -293,16 +321,16 @@ class ClinicalCopilotAuditBridgeApiTest extends TestCase
             "fallback_reason" => null,
         ]);
         // recordLogItem base64-encodes comments before storage.
-        $this->assertSame($expectedComments, base64_decode((string) $logRow['comments']));
+        $this->assertSame($expectedComments, base64_decode($this->asString($logRow['comments'])));
 
         $discRow = $this->latestDisclosureRow();
         $this->assertNotNull($discRow);
         $this->assertSame(self::EVENT_TYPE, $discRow['event']);
         $this->assertSame(self::LLM_PROVIDER_IDENTITY, $discRow['recipient']);
         $this->assertSame('admin', $discRow['user']);
-        $this->assertSame($this->patientPid, (int) $discRow['patient_id']);
-        $this->assertStringContainsString('outcome=answered', (string) $discRow['description']);
-        $this->assertStringContainsString($record["correlation_id"], (string) $discRow['description']);
+        $this->assertSame($this->patientPid, $this->asInt($discRow['patient_id']));
+        $this->assertStringContainsString('outcome=answered', $this->asString($discRow['description']));
+        $this->assertStringContainsString($this->asString($record["correlation_id"]), $this->asString($discRow['description']));
     }
 
     /** Mandatory adversarial #5: degraded and fallback each -> 201 + one log + one disclosure. */
@@ -321,7 +349,7 @@ class ClinicalCopilotAuditBridgeApiTest extends TestCase
 
             $discRow = $this->latestDisclosureRow();
             $this->assertNotNull($discRow, $outcome);
-            $this->assertStringContainsString('outcome=' . $outcome, (string) $discRow['description']);
+            $this->assertStringContainsString('outcome=' . $outcome, $this->asString($discRow['description']));
         }
     }
 
@@ -366,7 +394,11 @@ class ClinicalCopilotAuditBridgeApiTest extends TestCase
             $body = (string) $response->getBody();
             $this->assertSame('{"error":"unprocessable"}', $body, $label);
             if ($expectedBody === null) {
-                $expectedBody = $body;
+                // Capture from a fresh expression (type `string`) rather than the
+                // literal-narrowed $body, so the cross-shape identity assertion
+                // below compares string-to-string instead of a provably-equal
+                // constant pair. Same bytes, unchanged assertion.
+                $expectedBody = (string) $response->getBody();
             }
             $this->assertSame($expectedBody, $body, $label);
 
@@ -444,7 +476,7 @@ class ClinicalCopilotAuditBridgeApiTest extends TestCase
             "SELECT `fname`, `lname` FROM `patient_data` WHERE `pid` = ?",
             [$this->patientPid]
         );
-        $patientName = (string) ($patientRow['lname'] ?? 'Smith');
+        $patientName = $this->asString($patientRow['lname'] ?? 'Smith');
 
         $record = $this->validRecord("answered");
         $response = $this->testClient->post(self::ENDPOINT, $record);
@@ -455,8 +487,8 @@ class ClinicalCopilotAuditBridgeApiTest extends TestCase
         $this->assertNotNull($logRow);
         $this->assertNotNull($discRow);
 
-        $decodedComments = base64_decode((string) $logRow['comments']);
-        $description = (string) $discRow['description'];
+        $decodedComments = base64_decode($this->asString($logRow['comments']));
+        $description = $this->asString($discRow['description']);
         $responseBody = (string) $response->getBody();
 
         foreach ([$decodedComments, $description, $responseBody] as $haystack) {
@@ -528,7 +560,7 @@ class ClinicalCopilotAuditBridgeApiTest extends TestCase
             [self::EVENT_TYPE, $this->patientPid]
         );
         $this->assertNotEmpty($discRows);
-        $storedDate = (string) $discRows[0]['date'];
+        $storedDate = $this->asString($discRows[0]['date']);
         $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $storedDate);
         $this->assertStringNotContainsString('T', $storedDate);
         $this->assertStringNotContainsString('Z', $storedDate);
