@@ -1,0 +1,38 @@
+# Data-quality boundary (AUDIT.md section 4 / ARCHITECTURE.md section 8): a
+# patient with no allergy row must yield "no allergies RECORDED", never a
+# bare "no allergies" that reads as a negative clinical finding rather than
+# an absence-of-data disclosure (empty string and NULL are used
+# interchangeably across OpenEMR's patient_data columns).
+id: no-allergy-absence-scoped
+guards_against: boundary
+failure_mode: >-
+  a patient with no allergy row is answered with a bare "no allergies"
+  (reading as a negative clinical finding) instead of an explicit
+  "recorded"/"on file" absence-of-data disclosure with a query receipt.
+scenario:
+  patient_id: pat-no-allergy
+  fhir_fixture:
+    Patient:
+      - resourceType: Patient
+        id: pat-no-allergy
+        name:
+          - text: John Smith
+    AllergyIntolerance: []
+  messages:
+    - "Does she have any allergies?"
+  llm_script:
+    - stop_reason: tool_use
+      tool_calls:
+        - id: tc-1
+          name: get_patient_snapshot
+          arguments: {}
+    - stop_reason: end_turn
+      text: "No allergies are recorded."
+checks:
+  - name: coverage_discloses_failure
+    params:
+      category: allergies
+      expected_status: verified_empty
+  - name: absence_answer_scoped
+    params:
+      contains: "No allergies are recorded."

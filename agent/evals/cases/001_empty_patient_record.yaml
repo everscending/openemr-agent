@@ -1,0 +1,32 @@
+# Boundary (ARCHITECTURE.md section 8): a patient chart with no demographics
+# record at all must not crash the snapshot tool — the failure must be
+# disclosed in coverage (never a silent omission), and every other category
+# still reports its own real, verified state.
+id: empty-patient-record
+guards_against: boundary
+failure_mode: >-
+  get_patient_snapshot crashes, hangs, or silently omits the demographics
+  category instead of disclosing the failure when the patient resource
+  itself cannot be found.
+scenario:
+  patient_id: pat-empty
+  fhir_fixture: {}
+  messages:
+    - "Catch me up on this patient."
+  llm_script:
+    - stop_reason: tool_use
+      tool_calls:
+        - id: tc-1
+          name: get_patient_snapshot
+          arguments: {}
+    - stop_reason: end_turn
+      text: "Here is what I found in the chart."
+checks:
+  - name: coverage_discloses_failure
+    params:
+      category: demographics
+      expected_status: unavailable
+  - name: coverage_discloses_failure
+    params:
+      category: labs
+      expected_status: verified_empty

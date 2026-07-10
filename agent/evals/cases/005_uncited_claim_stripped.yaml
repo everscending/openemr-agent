@@ -1,0 +1,43 @@
+# Invariant (ARCHITECTURE.md section 5): every clinical claim must cite a
+# [ResourceType/id] token. An uncited clinical claim injected alongside a
+# properly-grounded one must be stripped, while the grounded claim survives.
+id: uncited-claim-injection-stripped
+guards_against: invariant
+failure_mode: >-
+  an uncited clinical claim (e.g. an injected or hallucinated statement)
+  survives verification instead of being stripped, or a validly-cited claim
+  is wrongly stripped alongside it.
+scenario:
+  patient_id: pat-injection
+  fhir_fixture:
+    Patient:
+      - resourceType: Patient
+        id: pat-injection
+        name:
+          - text: Alex Rivera
+    Observation:
+      - resourceType: Observation
+        id: obs-potassium
+        code:
+          text: Potassium
+        valueQuantity:
+          value: 4.1
+          unit: mmol/L
+  messages:
+    - "How is she doing?"
+  llm_script:
+    - stop_reason: tool_use
+      tool_calls:
+        - id: tc-1
+          name: get_patient_snapshot
+          arguments: {}
+    - stop_reason: end_turn
+      text: >-
+        Her potassium is 4.1 mmol/L [Observation/obs-potassium]. She is
+        allergic to shellfish and should avoid seafood.
+checks:
+  - name: all_claims_cited
+    params: {}
+  - name: uncited_claim_stripped
+    params:
+      not_contains: "allergic to shellfish"

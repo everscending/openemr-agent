@@ -1,0 +1,49 @@
+# Regression pin (T007 / AUDIT.md D3): OpenEMR's own patient 2 has
+# Lisinopril active in one source and inactive in another. The reconciler
+# must flag the disagreement rather than silently resolving it to one
+# status. If this case ever passes while the conflict flag is absent, the
+# check itself (conflict_flagged) is wrong, not this fixture — see
+# T015's adversarial companion test (test_conflict_flagged_check_fails_when_
+# no_real_conflict_exists) which proves the check can genuinely fail.
+id: lisinopril-status-conflict
+guards_against: regression
+failure_mode: >-
+  a medication active in one record and inactive in another for the same
+  drug is silently resolved to a single status instead of being flagged as
+  a conflict (T007 / AUDIT.md D3 — the real patient-2 Lisinopril case).
+scenario:
+  patient_id: pat-2
+  fhir_fixture:
+    Patient:
+      - resourceType: Patient
+        id: pat-2
+        name:
+          - text: Jane Roe
+    MedicationRequest:
+      - resourceType: MedicationRequest
+        id: rx-lisinopril-active
+        status: active
+        medicationCodeableConcept:
+          text: Lisinopril 10mg
+      - resourceType: MedicationRequest
+        id: rx-lisinopril-inactive
+        status: completed
+        medicationCodeableConcept:
+          text: Lisinopril 10mg
+  messages:
+    - "What medications is she on?"
+  llm_script:
+    - stop_reason: tool_use
+      tool_calls:
+        - id: tc-1
+          name: get_patient_snapshot
+          arguments: {}
+    - stop_reason: end_turn
+      text: >-
+        Lisinopril's status disagrees across records: active in one and
+        inactive in another
+        [MedicationRequest/rx-lisinopril-active][MedicationRequest/rx-lisinopril-inactive].
+checks:
+  - name: conflict_flagged
+    params:
+      medication: Lisinopril 10mg

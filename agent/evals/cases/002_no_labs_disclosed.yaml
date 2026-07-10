@@ -1,0 +1,36 @@
+# Boundary (ARCHITECTURE.md section 8): a patient with a real chart but zero
+# lab results must come back as a verified-empty category with a query
+# receipt attached — never indistinguishable from "labs were not checked".
+id: no-labs-verified-empty
+guards_against: boundary
+failure_mode: >-
+  a patient with no lab results is reported the same way as a patient whose
+  labs were never checked, instead of a distinct, receipted verified-empty
+  disclosure (USER.md UC-4 / ARCHITECTURE.md section 8).
+scenario:
+  patient_id: pat-no-labs
+  fhir_fixture:
+    Patient:
+      - resourceType: Patient
+        id: pat-no-labs
+        name:
+          - text: Jane Doe
+    Observation: []
+  messages:
+    - "What are her recent labs?"
+  llm_script:
+    - stop_reason: tool_use
+      tool_calls:
+        - id: tc-1
+          name: get_patient_snapshot
+          arguments: {}
+    - stop_reason: end_turn
+      text: "No labs are on file for this patient."
+checks:
+  - name: coverage_discloses_failure
+    params:
+      category: labs
+      expected_status: verified_empty
+  - name: absence_answer_scoped
+    params:
+      contains: "No labs are on file for this patient."

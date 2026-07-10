@@ -1,0 +1,35 @@
+# Invariant (ARCHITECTURE.md section 7: the physician always knows what the
+# agent did NOT check): a category fetch that genuinely fails upstream must
+# surface as "unavailable" with a reason, never silently vanish or crash the
+# whole snapshot.
+id: tool-failure-discloses-coverage
+guards_against: invariant
+failure_mode: >-
+  a category whose fetch fails upstream is silently omitted from coverage
+  (or crashes the whole tool call) instead of being disclosed as
+  unavailable with a reason.
+scenario:
+  patient_id: pat-tool-failure
+  fhir_fixture:
+    Patient:
+      - resourceType: Patient
+        id: pat-tool-failure
+        name:
+          - text: Sam Lee
+  fhir_failures:
+    - Observation
+  messages:
+    - "Catch me up."
+  llm_script:
+    - stop_reason: tool_use
+      tool_calls:
+        - id: tc-1
+          name: get_patient_snapshot
+          arguments: {}
+    - stop_reason: end_turn
+      text: "Here is what I found."
+checks:
+  - name: coverage_discloses_failure
+    params:
+      category: labs
+      expected_status: unavailable
