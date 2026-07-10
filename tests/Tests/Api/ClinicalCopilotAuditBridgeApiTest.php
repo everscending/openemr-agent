@@ -419,7 +419,14 @@ class ClinicalCopilotAuditBridgeApiTest extends TestCase
 
         $this->setModuleActive(0);
         $inactive = $this->testClient->post(self::ENDPOINT, $this->validRecord());
-        $this->assertSame(404, $inactive->getStatusCode());
+        // CORRECTED 2026-07-09 (orchestrator-authorized): a disabled module is
+        // gated by core (globals.php:754-758 -> http_response_code(401) +
+        // exit(1)) *before* audit-bridge.php runs, so the status is 401, not
+        // 404. The body must NOT be this endpoint's own unauthorized payload:
+        // identical status, different origin. Asserting the status alone would
+        // pass against an endpoint that ran and rejected the caller itself.
+        $this->assertSame(401, $inactive->getStatusCode());
+        $this->assertNotSame('{"error":"unauthorized"}', (string) $inactive->getBody());
         $this->assertSame($beforeLog, $this->auditRowCount());
         $this->assertSame($beforeDisc, $this->disclosureRowCount());
 
