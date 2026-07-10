@@ -27,12 +27,14 @@ Control flow the tests pin down:
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from enum import Enum
 
+from opentelemetry.trace import Tracer
 from pydantic import BaseModel, Field, ValidationError
 
 from copilot.agent.ports import (
@@ -55,7 +57,12 @@ from copilot.contracts.coverage import CategoryCoverage, CoverageUnavailable
 from copilot.contracts.refs import ResourceRef
 from copilot.contracts.tools import PatientSnapshotOutput
 from copilot.contracts.verification import VerificationVerdict
+from copilot.telemetry import tracing
+from copilot.telemetry.metrics import NullToolFailureRecorder, ToolFailureRecorder
+from copilot.telemetry.pricing import DEFAULT_PRICE_TABLE, PriceTable, compute_cost
 from copilot.verification import verify_response
+
+_logger = logging.getLogger(__name__)
 
 #: Default per-LLM-call deadline (ARCHITECTURE.md §7). The loop abandons a hung
 #: call at this bound and degrades to the non-AI snapshot. A whole-run
@@ -240,6 +247,9 @@ class AgentLoop:
         system_prompt: str = SYSTEM_PROMPT,
         now: Callable[[], datetime] = _default_now,
         monotonic: Callable[[], float] = time.monotonic,
+        tracer: Tracer | None = None,
+        price_table: PriceTable | None = None,
+        tool_metrics: ToolFailureRecorder | None = None,
     ) -> None:
         if not patient_id:
             raise ValueError("patient_id is required")
@@ -257,6 +267,13 @@ class AgentLoop:
         self._system_prompt = system_prompt
         self._now = now
         self._monotonic = monotonic
+        self._tracer: Tracer = tracer if tracer is not None else tracing.get_tracer()
+        self._price_table: PriceTable = (
+            price_table if price_table is not None else DEFAULT_PRICE_TABLE
+        )
+        self._tool_metrics: ToolFailureRecorder = (
+            tool_metrics if tool_metrics is not None else NullToolFailureRecorder()
+        )
 
     async def run(
         self, question: str, *, history: Sequence[LLMMessage] = ()
@@ -268,7 +285,18 @@ class AgentLoop:
         so single-turn callers (and every T010 test) are unaffected. The loop
         itself stays stateless: the caller (the ``/chat`` endpoint) owns
         conversation storage and passes the replay in on each call.
+
+        The whole run is wrapped in one ``chat.request`` root span (T014
+        criterion 1); every LLM/tool/verification span created below nests
+        under it automatically via OTel's context propagation.
         """
+        with self._tracer.start_as_current_span(tracing.SPAN_CHAT_REQUEST) as root_span:
+            root_span.set_attribute(tracing.CORRELATION_ID_ATTR, self._correlation_id)
+            return await self._run_conversation(question, history=history)
+
+    async def _run_conversation(
+        self, question: str, *, history: Sequence[LLMMessage] = ()
+    ) -> AgentResult:
         messages: list[LLMMessage] = list(history) + [
             LLMMessage(
                 role="user",
@@ -332,7 +360,7 @@ class AgentLoop:
                             )
                         )
                         continue
-                    verdict = verify_response(draft, refs)
+                    verdict = self._verify(draft, refs)
                     return AgentResult(
                         transcript=self._transcript(entries),
                         coverage=tuple(coverage),
@@ -367,6 +395,23 @@ class AgentLoop:
             coverage,
             refs,
         )
+
+    def _verify(
+        self, draft: str, refs: list[ResourceRef]
+    ) -> VerificationVerdict:
+        """Run T008/T009 verification inside a ``verify.response`` child span
+        carrying the verdict counts (T014 criterion 2) — never claim text."""
+        with self._tracer.start_as_current_span(
+            tracing.SPAN_VERIFY_RESPONSE
+        ) as span:
+            span.set_attribute(tracing.CORRELATION_ID_ATTR, self._correlation_id)
+            verdict = verify_response(draft, refs)
+            span.set_attribute("verify.claims_total", verdict.counts.claims_total)
+            span.set_attribute("verify.claims_passed", verdict.counts.claims_passed)
+            span.set_attribute(
+                "verify.claims_stripped", verdict.counts.claims_stripped
+            )
+            return verdict
 
     # -- tool-call handling ------------------------------------------------
 
@@ -461,86 +506,124 @@ class AgentLoop:
         refs: list[ResourceRef],
         snapshots: list[PatientSnapshotOutput],
     ) -> None:
-        started = self._now()
-        t0 = self._monotonic()
-        try:
-            result = await tool.executor(validated)  # type: ignore[arg-type]
-        except Exception as exc:  # noqa: BLE001 — governing invariant: degrade,
-            # never crash. A tool failure (T003 typed errors included) becomes a
-            # typed "unavailable" turn for the LLM and surfaces in coverage.
+        with self._tracer.start_as_current_span(tracing.SPAN_TOOL_CALL) as span:
+            span.set_attribute(tracing.CORRELATION_ID_ATTR, self._correlation_id)
+            span.set_attribute("tool.name", tool.name)
+            started = self._now()
+            t0 = self._monotonic()
+            try:
+                result = await tool.executor(validated)  # type: ignore[arg-type]
+            except Exception as exc:  # noqa: BLE001 — governing invariant: degrade,
+                # never crash. A tool failure (T003 typed errors included) becomes
+                # a typed "unavailable" turn for the LLM and surfaces in coverage.
+                # The span never gets the exception message/traceback (T014: no
+                # ``record_exception`` — only the class name, via ``mark_error``);
+                # the human-readable ``reason`` string below feeds the LLM/
+                # coverage/transcript exactly as before T014, unrelated to spans.
+                duration = self._monotonic() - t0
+                reason = f"{type(exc).__name__}: {exc}"
+                tracing.mark_error(span, exc)
+                span.set_attribute("outcome", type(exc).__name__)
+                self._tool_metrics.record_tool_failure()
+                _logger.warning(
+                    "tool_call_failed",
+                    extra={"tool_name": tool.name, "error_type": type(exc).__name__},
+                )
+                coverage.append(
+                    CoverageUnavailable(category=tool.name, reason=reason)
+                )
+                messages.append(
+                    self._error_result(
+                        call_id,
+                        f"Tool '{tool.name}' is unavailable: {reason}",
+                    )
+                )
+                entries.append(
+                    self._tool_entry(
+                        tool.name, started, duration, detail=f"unavailable: {reason}"
+                    )
+                )
+                return
+
             duration = self._monotonic() - t0
-            reason = f"{type(exc).__name__}: {exc}"
-            coverage.append(
-                CoverageUnavailable(category=tool.name, reason=reason)
+            span.set_attribute("outcome", "ok")
+            refs.extend(collect_refs(result))
+            # Capture the snapshot so a later LLM failure can render it without
+            # refetching (criterion 3); the last one wins if re-fetched by the model.
+            if isinstance(result, PatientSnapshotOutput):
+                snapshots.append(result)
+            tool_coverage = getattr(result, "coverage", None)
+            if tool_coverage:
+                coverage.extend(tool_coverage)
+            content = (
+                result.model_dump_json()
+                if isinstance(result, BaseModel)
+                else str(result)
             )
             messages.append(
-                self._error_result(
-                    call_id,
-                    f"Tool '{tool.name}' is unavailable: {reason}",
-                )
+                LLMMessage(role="tool", content=content, tool_call_id=call_id)
             )
             entries.append(
-                self._tool_entry(
-                    tool.name, started, duration, detail=f"unavailable: {reason}"
-                )
+                self._tool_entry(tool.name, started, duration, detail="ok")
             )
-            return
-
-        duration = self._monotonic() - t0
-        refs.extend(collect_refs(result))
-        # Capture the snapshot so a later LLM failure can render it without
-        # refetching (criterion 3); the last one wins if re-fetched by the model.
-        if isinstance(result, PatientSnapshotOutput):
-            snapshots.append(result)
-        tool_coverage = getattr(result, "coverage", None)
-        if tool_coverage:
-            coverage.extend(tool_coverage)
-        content = (
-            result.model_dump_json()
-            if isinstance(result, BaseModel)
-            else str(result)
-        )
-        messages.append(
-            LLMMessage(role="tool", content=content, tool_call_id=call_id)
-        )
-        entries.append(
-            self._tool_entry(tool.name, started, duration, detail="ok")
-        )
 
     # -- LLM turn ----------------------------------------------------------
 
     async def _call_llm(
         self, messages: list[LLMMessage], entries: list[TranscriptEntry]
     ) -> LLMResponse:
-        started = self._now()
-        t0 = self._monotonic()
-        try:
-            # Per-call deadline enforced here (not per-conversation). ``wait_for``
-            # cancels the hung coroutine at the bound — it is never awaited to
-            # completion — and we raise the port's typed timeout (no vendor type).
-            response = await asyncio.wait_for(
-                self._llm.complete(
-                    system=self._system_prompt,
-                    messages=tuple(messages),
-                    tools=self._registry.schemas(),
-                ),
-                timeout=self._llm_timeout,
+        with self._tracer.start_as_current_span(tracing.SPAN_LLM_CALL) as span:
+            span.set_attribute(tracing.CORRELATION_ID_ATTR, self._correlation_id)
+            span.set_attribute("model", self._model)
+            started = self._now()
+            t0 = self._monotonic()
+            try:
+                try:
+                    # Per-call deadline enforced here (not per-conversation).
+                    # ``wait_for`` cancels the hung coroutine at the bound — it is
+                    # never awaited to completion — and we raise the port's typed
+                    # timeout (no vendor type).
+                    response = await asyncio.wait_for(
+                        self._llm.complete(
+                            system=self._system_prompt,
+                            messages=tuple(messages),
+                            tools=self._registry.schemas(),
+                        ),
+                        timeout=self._llm_timeout,
+                    )
+                except TimeoutError as exc:
+                    raise LLMTimeout("LLM call exceeded its deadline") from exc
+            except LLMUnavailable as exc:
+                # Covers both the timeout above and any LLMUnavailable subtype
+                # (e.g. LLMTransportError) raised directly by ``self._llm``.
+                # Never ``span.record_exception`` — class name only (T014).
+                tracing.mark_error(span, exc)
+                raise
+            duration = self._monotonic() - t0
+            entries.append(
+                TranscriptEntry(
+                    kind=TranscriptEntryKind.LLM,
+                    name=self._model,
+                    started_at=started,
+                    duration_seconds=max(duration, 0.0),
+                    input_tokens=response.input_tokens,
+                    output_tokens=response.output_tokens,
+                    detail=response.stop_reason.value,
+                )
             )
-        except TimeoutError as exc:
-            raise LLMTimeout("LLM call exceeded its deadline") from exc
-        duration = self._monotonic() - t0
-        entries.append(
-            TranscriptEntry(
-                kind=TranscriptEntryKind.LLM,
-                name=self._model,
-                started_at=started,
-                duration_seconds=max(duration, 0.0),
-                input_tokens=response.input_tokens,
-                output_tokens=response.output_tokens,
-                detail=response.stop_reason.value,
+            if response.input_tokens is not None:
+                span.set_attribute("llm.input_tokens", response.input_tokens)
+            if response.output_tokens is not None:
+                span.set_attribute("llm.output_tokens", response.output_tokens)
+            cost = compute_cost(
+                self._model,
+                response.input_tokens,
+                response.output_tokens,
+                self._price_table,
             )
-        )
-        return response
+            if cost is not None:
+                span.set_attribute("llm.cost_usd", str(cost))
+            return response
 
     # -- helpers -----------------------------------------------------------
 

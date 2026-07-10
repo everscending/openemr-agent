@@ -15,6 +15,7 @@ terminal ``verdict`` event carrying the T008/T009 counts.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -23,11 +24,17 @@ from typing import Mapping
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Response
 from fastapi.responses import JSONResponse, StreamingResponse
+from opentelemetry.trace import Tracer
 
 from copilot.agent.loop import DEFAULT_LLM_TIMEOUT_SECONDS, AgentLoop, AgentResult
 from copilot.agent.ports import LLMClient, LLMMessage
 from copilot.agent.tools import ToolRegistry
-from copilot.audit import AuditBridgeClient, AuditInvocationRecord, AuditOutcome
+from copilot.audit import (
+    AuditBridgeClient,
+    AuditInvocationRecord,
+    AuditMetricsRecorder,
+    AuditOutcome,
+)
 from copilot.contracts.chat import ChatRequest, ChatResponse, DegradedReason
 from copilot.contracts.tools import GetPatientSnapshotInput, PatientSnapshotOutput
 from copilot.contracts.verification import VerificationCounts
@@ -49,6 +56,9 @@ from copilot.readiness import (
     default_deadline,
     run_readiness_checks,
 )
+from copilot.telemetry.metrics import TelemetryMetrics
+
+_logger = logging.getLogger("copilot.observability")
 
 DEFAULT_CHAT_MODEL = "claude-opus-4-8"
 DEFAULT_CHAT_MAX_STEPS = 6
@@ -89,11 +99,21 @@ def _noop_sequence_recorder(event: str) -> None:
     return None
 
 
-def _default_audit_bridge() -> AuditBridgeClient | None:
+def _default_audit_bridge(metrics: AuditMetricsRecorder) -> AuditBridgeClient | None:
     base_url = os.environ.get(AUDIT_BRIDGE_URL_ENV)
     if not base_url:
         return None
-    return AuditBridgeClient(base_url=base_url)
+    return AuditBridgeClient(base_url=base_url, metrics=metrics)
+
+
+def _default_tracer() -> Tracer:
+    # Imported lazily: this is the one seam that pulls in the OTel SDK bootstrap
+    # module, kept out of this module's top-level import list the same way
+    # ``_default_chat_llm`` keeps ``anthropic`` out (T014's import-guard scope
+    # is module-level imports only — see ``copilot.telemetry.import_guard``).
+    from copilot.telemetry.bootstrap import configure_tracing
+
+    return configure_tracing()
 
 
 def _build_audit_record(
@@ -313,6 +333,8 @@ def create_app(
     clock: Callable[[], datetime] = _default_clock,
     audit_bridge: AuditBridgeClient | None = None,
     audit_sequence_recorder: Callable[[str], None] | None = None,
+    tracer: Tracer | None = None,
+    metrics: TelemetryMetrics | None = None,
 ) -> FastAPI:
     """Build and return the Co-Pilot FastAPI application.
 
@@ -335,7 +357,13 @@ def create_app(
     (ARCHITECTURE.md §7's fail-open extends to missing configuration — this
     never blocks ``/chat``). ``audit_sequence_recorder`` is a test-only
     ordering seam (default a no-op) asserting ``response_finalized`` precedes
-    ``audit_post_attempted``.
+    ``audit_post_attempted``. ``tracer`` is the T014 OTel tracer seam; omitted,
+    it is resolved once via :mod:`copilot.telemetry.bootstrap` (env-configured,
+    inert with no exporter configured). ``metrics`` is the T014 counters
+    object backing ``/metrics``; omitted, a fresh :class:`TelemetryMetrics` is
+    created and — unless the caller supplied its own ``audit_bridge`` — also
+    wired into the default audit-bridge client, so both tool-failure and
+    audit-delivery counts land on the same ``/metrics`` snapshot.
     """
     install_correlation_log_record_factory()
 
@@ -355,14 +383,20 @@ def create_app(
         if conversation_store is not None
         else InMemoryConversationStore(ttl_seconds=conversation_ttl_seconds, now=clock)
     )
+    resolved_metrics: TelemetryMetrics = (
+        metrics if metrics is not None else TelemetryMetrics()
+    )
     resolved_audit_bridge: AuditBridgeClient | None = (
-        audit_bridge if audit_bridge is not None else _default_audit_bridge()
+        audit_bridge
+        if audit_bridge is not None
+        else _default_audit_bridge(resolved_metrics)
     )
     resolved_audit_sequence_recorder: Callable[[str], None] = (
         audit_sequence_recorder
         if audit_sequence_recorder is not None
         else _noop_sequence_recorder
     )
+    resolved_tracer: Tracer = tracer if tracer is not None else _default_tracer()
 
     app = FastAPI(title="Clinical Co-Pilot Agent")
     app.add_middleware(CorrelationIdMiddleware)
@@ -377,6 +411,16 @@ def create_app(
         """Readiness probe: concurrently checks all configured dependencies."""
         status_code, body = await run_readiness_checks(checkers, deadline=deadline)
         return JSONResponse(status_code=status_code, content=body)
+
+    @app.get("/metrics")
+    def metrics_endpoint() -> JSONResponse:
+        """T014 criterion 6: counters only — never request-scoped data.
+
+        Not request-scoped: carries no patient id, conversation id,
+        correlation id, or token — a metrics scrape must never become a PHI
+        channel (ARCHITECTURE.md §7).
+        """
+        return JSONResponse(content=resolved_metrics.snapshot())
 
     @app.post("/chat")
     async def chat(chat_request: ChatRequest, stream: bool = False) -> Response:
@@ -435,8 +479,24 @@ def create_app(
             correlation_id=correlation_id,
             max_steps=chat_max_steps,
             llm_timeout=chat_llm_timeout,
+            tracer=resolved_tracer,
+            tool_metrics=resolved_metrics,
         )
         result = await agent_loop.run(chat_request.message, history=history)
+
+        # T014 criterion 3: at least one PHI-free log record per request,
+        # correlation-ID-stamped automatically by the T001 factory installed
+        # above — never pass `correlation_id` via `extra` (it would collide).
+        _logger.info(
+            "chat_request_completed",
+            extra={
+                "outcome": (
+                    "degraded"
+                    if result.is_degraded
+                    else "fallback" if result.is_fallback else "answered"
+                )
+            },
+        )
 
         if result.is_degraded:
             payload = await _build_degraded_payload(
