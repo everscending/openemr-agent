@@ -628,9 +628,64 @@ Preserve existing authors/copyrights when editing files.
   (forbidden globals, forbidden direct instantiations, namespace rules, etc.)
 - Commit messages are validated against Conventional Commits format in CI
 
+## Verification and Safety Invariants (Clinical Co-Pilot)
+
+These bind any code touching the co-pilot — the `agent/` service and the
+`oe-module-clinical-copilot` module. They were learned the expensive way; the
+full write-up with the failing cases is in `.tdd-swarm/LESSONS.md`, and the
+design rationale is in `ARCHITECTURE.md` §5, §7, and §9.
+
+**Know which way each layer fails.** Verification, patient binding, and
+conversation scoping fail **closed**. Audit delivery fails **open, with alarm**
+(`ARCHITECTURE.md:367`) — a failed audit write must never block, delay, or alter
+a clinical response. This is the one inversion in the system, and the instinct
+built by every other layer is wrong here.
+
+**Never let the guard become the leak.**
+- No exception *message* in a log, alert, span, or response — the class name
+  only. Our exception messages carry FHIR URLs and request payloads.
+- Never call `span.record_exception()`. Set `error.type`; status without
+  description.
+- Span names are static and low-cardinality; identifiers go in attributes.
+- The system prompt is static: interpolating a patient id both invalidates the
+  prompt cache on every call and puts PHI in the string most likely to be logged.
+- `/metrics` is not request-scoped — no patient id, conversation id, correlation
+  id, or token.
+
+**Enforce PHI exclusion by type, not by discipline.** A record that *cannot* hold
+free text (a closed `extra="forbid"` model of ids, counts, enums, timestamps) is
+stronger than one that merely doesn't. Where the type can't help — spans, logs —
+sweep for sentinels in tests.
+
+**Never return a 403 where a 404 will do.** Confirming that a PHI-bearing resource
+*exists* to a caller who does not own it is an oracle. Unknown, expired,
+wrong-patient, and wrong-caller must render one byte-identical body.
+
+**A pass-through marker must never be a silent pass.** `unavailable_uncoded`,
+`numeric: unchecked`, and an absent cost attribute all mean "we could not check
+this," and all survive into the output. Be stingy with them; never mark something
+unchecked when a real check was possible; never emit `cost=0` for "unknown cost."
+
+**Structured data never goes through the claim verifier.** It carries tool data,
+not model prose — there are no claims to ground, and stripping would fail closed
+into nonsense.
+
+**A guard you have never seen fail is not a guard.** Test import guards with
+planted violations, eval runners with a mutated case that must fail. A structural
+check scoped to one module's source misses transitive coupling — import in a clean
+subprocess and inspect `sys.modules`.
+
+**Assert the property, not its proxy.** Fail-open means byte-identity of the
+response, not `status == 200`. An abandoned timeout means the hung coroutine never
+completed, not merely that a fallback returned. "Does not refetch" means counting
+requests at the transport seam. Patient binding is asserted at the transport seam,
+because checking a return value passes against code that fetches the wrong patient
+and then filters.
+
 ## Key Documentation
 
 - `CONTRIBUTING.md` - Contributing guidelines
 - `API_README.md` - REST API docs
 - `FHIR_README.md` - FHIR implementation
 - `tests/Tests/README.md` - Testing guide
+- `.tdd-swarm/LESSONS.md` - Verification lessons from the co-pilot TDD run
