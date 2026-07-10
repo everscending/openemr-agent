@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -233,9 +233,18 @@ class AgentLoop:
         self._now = now
         self._monotonic = monotonic
 
-    async def run(self, question: str) -> AgentResult:
-        """Drive the loop to a verified answer or a structured fallback."""
-        messages: list[LLMMessage] = [
+    async def run(
+        self, question: str, *, history: Sequence[LLMMessage] = ()
+    ) -> AgentResult:
+        """Drive the loop to a verified answer or a structured fallback.
+
+        ``history`` is prior conversation turns (T011 multi-turn chat) to
+        replay to the LLM ahead of this turn's question — empty by default,
+        so single-turn callers (and every T010 test) are unaffected. The loop
+        itself stays stateless: the caller (the ``/chat`` endpoint) owns
+        conversation storage and passes the replay in on each call.
+        """
+        messages: list[LLMMessage] = list(history) + [
             LLMMessage(
                 role="user",
                 content=(

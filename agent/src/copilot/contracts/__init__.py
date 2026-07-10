@@ -5,6 +5,7 @@ frozen, strictly validated, and JSON round-trippable.
 """
 
 from copilot.contracts.base import ContractModel
+from copilot.contracts.chat import ChatRequest, ChatResponse
 from copilot.contracts.coverage import (
     CategoryCoverage,
     CoverageOk,
@@ -68,6 +69,8 @@ __all__ = [
     "VerificationVerdict",
     "AllergyRecord",
     "CategoryCoverage",
+    "ChatRequest",
+    "ChatResponse",
     "ConditionRecord",
     "ContractModel",
     "CoverageOk",
