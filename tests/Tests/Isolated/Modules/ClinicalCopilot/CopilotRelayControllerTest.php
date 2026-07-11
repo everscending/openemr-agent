@@ -417,7 +417,7 @@ final class FakeServiceTokenProvider implements ServiceTokenProvider
     {
     }
 
-    public function getToken(): string
+    public function getToken(string $patientUuid = ''): string
     {
         return $this->token;
     }

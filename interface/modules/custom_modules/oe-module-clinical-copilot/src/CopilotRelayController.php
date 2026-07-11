@@ -76,7 +76,7 @@ final class CopilotRelayController
         }
 
         try {
-            $token = $this->tokenProvider->getToken();
+            $token = $this->tokenProvider->getToken($patientId);
             $answer = $this->agent->chat(
                 new CopilotChatRequest($message, $patientId, $token, $conversationId)
             );

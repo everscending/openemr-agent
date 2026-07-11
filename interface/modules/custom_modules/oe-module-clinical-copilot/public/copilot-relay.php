@@ -31,8 +31,8 @@ use OpenEMR\Core\ModulesClassLoader;
 use OpenEMR\Core\OEGlobalsBag;
 use OpenEMR\Modules\ClinicalCopilot\CopilotRelayController;
 use OpenEMR\Modules\ClinicalCopilot\HttpCopilotAgentChatClient;
-use OpenEMR\Modules\ClinicalCopilot\OAuthServiceTokenProvider;
 use OpenEMR\Modules\ClinicalCopilot\SessionPatientAccessGuard;
+use OpenEMR\Modules\ClinicalCopilot\SmartLaunchTokenProvider;
 use Symfony\Component\HttpFoundation\Request;
 
 $classLoader = new ModulesClassLoader(OEGlobalsBag::getInstance()->getProjectDir());
@@ -47,12 +47,16 @@ $request->setSession($session);
 
 $agentBaseUrl = getenv('COPILOT_AGENT_BASE_URL') ?: 'http://copilot:8080';
 $oauthBaseUrl = getenv('COPILOT_OAUTH_BASE_URL') ?: 'https://localhost';
-$serviceUsername = getenv('COPILOT_SERVICE_USERNAME') ?: 'admin';
-$servicePassword = getenv('COPILOT_SERVICE_PASSWORD') ?: 'pass';
+
+// The acting clinician is the logged-in session user (T027): the relay runs
+// inside their authenticated OpenEMR session, so the per-user/per-patient token
+// is minted for them — no service-account downgrade. An absent/invalid session
+// user id makes SmartLaunchTokenProvider fail closed into the graceful state.
+$clinicianUserId = (int) $session->get('authUserID');
 
 $controller = new CopilotRelayController(
     new HttpCopilotAgentChatClient($agentBaseUrl, 120),
-    new OAuthServiceTokenProvider($oauthBaseUrl, $serviceUsername, $servicePassword),
+    new SmartLaunchTokenProvider($clinicianUserId, $oauthBaseUrl),
     new SessionPatientAccessGuard(),
     ServiceContainer::getLogger(),
 );

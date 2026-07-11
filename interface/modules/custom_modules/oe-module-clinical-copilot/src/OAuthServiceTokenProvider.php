@@ -57,9 +57,14 @@ final class OAuthServiceTokenProvider implements ServiceTokenProvider
     ) {
     }
 
-    public function getToken(): string
+    /**
+     * @param string $patientUuid ignored: this is the service-account fallback
+     *   (one bearer for the `admin` user); patient binding is provided by the
+     *   per-user SmartLaunchTokenProvider (T027), which supersedes this provider in
+     *   the relay wiring. Kept for the provisioning helper and as the T021 reference.
+     */
+    public function getToken(string $patientUuid = ''): string
     {
-        // TODO(SMART): per-user token, see deferred ticket T027
         $clientId = $this->ensureProvisionedClientId();
         return $this->passwordGrant($clientId);
     }
