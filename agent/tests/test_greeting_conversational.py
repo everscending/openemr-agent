@@ -63,9 +63,86 @@ def test_conversational_guidance_covers_greetings_and_capability_questions() -> 
     # acknowledgement (ticket criterion 1).
     assert "greeting" in lowered
     assert "acknowledg" in lowered  # acknowledgement / acknowledgment
-    # A capability question ("what can you do?") is answered by describing
-    # capabilities, not by summarizing the patient.
+    # A capability question ("what can you do?") is still named as a
+    # non-clinical input shape, even though the reply steers to a question
+    # (see test_conversational_guidance_steers_to_question_form_not_declarative
+    # below), not a capability list.
     assert "capabilit" in lowered  # capabilities / capability
+
+
+# ==========================================================================
+# T041 re-scope (live-verified) — the LLM's declarative reply to the original
+# clause ("Hello! I can retrieve, synthesize, and cite ... medications,
+# problems, labs, ...") is classified by the real verifier as an uncited
+# clinical claim and stripped, re-triggering the fallback live. The verifier
+# stays untouched (prompt-only fix, per user's chosen path); the prompt must
+# instead steer to a brief GREETING + QUESTION form with no declarative
+# statements about the patient and no capability list, which the live verifier
+# is confirmed to keep verbatim.
+# ==========================================================================
+
+
+def test_conversational_guidance_steers_to_question_form_not_declarative() -> None:
+    lowered = loop_mod().SYSTEM_PROMPT.lower()
+    # Steers to ONE brief sentence, ending in a question about the chart —
+    # not a declarative "I am/I can ..." sentence or a capability list.
+    assert "one brief sentence" in lowered
+    assert "phrased as a question" in lowered
+    assert "declarative statements about the patient" in lowered
+    assert "list your own capabilities" in lowered
+    # The old wording that produced the live-observed declarative failure
+    # ("Hello! I can retrieve, synthesize, and cite ...") must be gone.
+    assert "describe your capabilities in a sentence or two" not in lowered
+
+
+# ==========================================================================
+# T041 re-scope — the reply form the prompt now steers to actually survives
+# the REAL (unmodified) verifier, and the declarative form it replaces does
+# not. Uses copilot.verification.verify_response directly, not ScriptedLLM,
+# so this is asserted at the same seam the orchestrator probed live.
+# ==========================================================================
+
+
+def test_greeting_question_form_survives_the_real_verifier_verbatim() -> None:
+    from copilot.verification import verify_response
+
+    for greeting in (
+        "Hello! What would you like to know about this patient's chart?",
+        "Hello! How can I help you with this patient today?",
+    ):
+        verdict = verify_response(greeting, [])
+        assert verdict.output_text == greeting
+        assert not verdict.fallback_triggered
+        assert verdict.counts.claims_stripped == 0
+
+
+def test_declarative_greeting_still_falls_back_on_the_real_verifier() -> None:
+    # Documents exactly the constraint the revised prompt clause must avoid:
+    # a declarative "I am/I can ..." reply is an uncited clinical claim to the
+    # (unmodified) verifier and triggers the full fallback. The segmenter only
+    # splits sentences on '.'/newline (not '!'), so a single exclamation-only
+    # greeting clause never truly probes this path — both cases below carry a
+    # genuine internal '.' so the declarative content lands in its own
+    # verifier-visible sentence, exactly like the live-observed failure
+    # ("Hello! I can retrieve, synthesize, and cite ... medications, problems,
+    # labs, allergies, and visit history.").
+    from copilot.verification import verify_response
+
+    # Live-reported example, quoted verbatim (no leading "Hello!" — still a
+    # declarative capability statement the prompt must not produce).
+    verdict = verify_response("I can retrieve your medications and labs.", [])
+    assert verdict.fallback_triggered
+
+    # A greeting-prefixed declarative reply — the exact shape the ORIGINAL
+    # (pre-rescope) clause produced live: the "Hello!" opener survives as
+    # scaffolding, but the declarative capability sentence that follows does
+    # not, so nothing claim-bearing survives and the whole reply falls back.
+    two_sentence = (
+        "Hello! I can retrieve, synthesize, and cite this patient's record. "
+        "I can access their medications, problems, labs, and visit history."
+    )
+    verdict2 = verify_response(two_sentence, [])
+    assert verdict2.fallback_triggered
 
 
 # ==========================================================================
