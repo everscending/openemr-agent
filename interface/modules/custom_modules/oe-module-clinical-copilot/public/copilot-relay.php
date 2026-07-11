@@ -51,7 +51,7 @@ $serviceUsername = getenv('COPILOT_SERVICE_USERNAME') ?: 'admin';
 $servicePassword = getenv('COPILOT_SERVICE_PASSWORD') ?: 'pass';
 
 $controller = new CopilotRelayController(
-    new HttpCopilotAgentChatClient($agentBaseUrl, 8),
+    new HttpCopilotAgentChatClient($agentBaseUrl, 120),
     new OAuthServiceTokenProvider($oauthBaseUrl, $serviceUsername, $servicePassword),
     new SessionPatientAccessGuard(),
     ServiceContainer::getLogger(),
