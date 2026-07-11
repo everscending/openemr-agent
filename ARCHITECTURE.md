@@ -29,7 +29,9 @@ gives a clean trust boundary.
 data exclusively through OpenEMR's existing FHIR R4 API using the user's
 token, so the EMR's ACL engine and OAuth scope enforcement decide what the
 agent can see — a nurse's token sees what a nurse sees. The agent holds no
-database credentials. It is additionally patient-context-bound: it can only be
+database credentials. (V1 demo caveat, disclosed: the relay presents a
+service-account token, with per-request ACL checks at the relay seam as the
+compensating control — §11.10, PRD_EXCEPTIONS.md E2.) It is additionally patient-context-bound: it can only be
 invoked from an open chart and only queries that patient. Known limitation,
 stated up front: OpenEMR's ACL is role-based, not panel-based — any
 chart-access role can open any chart, and the agent inherits exactly that
@@ -103,12 +105,12 @@ citations, numerics, and clinical-rule flags → response streams to the panel
 
 | Component | Description | Codebase anchors |
 |---|---|---|
-| **Chart panel** | Custom module `oe-module-clinical-copilot` (`openemr.bootstrap.php` entry point), rendered as a **persistent right-hand column on the patient Dashboard tab** (`demographics.php`) — **no core edits**. Mechanism: the module subscribes to a Dashboard render event (`PatientDemographics\RenderEvent`, e.g. `EVENT_SECTION_LIST_RENDER_AFTER`) and its PHP listener echoes an on-disk asset bundle (HTML fragment + CSS + JS) inline into the page; the JS wraps the existing dashboard (`#container_div`) into a narrower left region and adds the co-pilot as a new right column (same-document injection, not an iframe). Panel markup reuses OpenEMR/Bootstrap standard classes (`.card`, `.btn`, form controls) so it inherits native styling. Chat UI, streaming rendering, citation chips + evidence cards with open-in-chart links (§5 Layer 3). **Rejected alternatives:** a Summary *card* via `Card\SectionEvent` (renders below the fold, not prominent); a surgical `demographics.php` layout edit (works, but forfeits the clean drop-in — the docs' preferred shape, AUDIT.md:235); an iframe (loses direct `window.top` access needed for §5 Layer 3 citation navigation, though same-origin would have allowed it). | `src/Events/PatientDemographics/RenderEvent.php`, `src/Core/ModulesApplication.php`, `interface/patient_file/summary/demographics.php` (`#container_div` anchor), `src/Common/Session/PatientSessionUtil.php` |
-| **Token handoff** | Panel obtains a SMART-on-FHIR token from OpenEMR's OAuth2 server, scoped to the logged-in user and the open patient. Short-lived; per-conversation. | `src/RestControllers/AuthorizationController.php`, `src/RestControllers/SMART/ScopePermissionParser.php` |
+| **Chart panel** | Custom module `oe-module-clinical-copilot` (`openemr.bootstrap.php` entry point), rendered as a **persistent right-hand column on the patient Dashboard tab** (`demographics.php`) — **no core edits**. Mechanism: the module subscribes to a Dashboard render event (`PatientDemographics\RenderEvent`, e.g. `EVENT_SECTION_LIST_RENDER_AFTER`) and its PHP listener echoes an on-disk asset bundle (HTML fragment + CSS + JS) inline into the page; the JS wraps the existing dashboard (`#container_div`) into a narrower left region and adds the co-pilot as a new right column (same-document injection, not an iframe). Panel markup reuses OpenEMR/Bootstrap standard classes (`.card`, `.btn`, form controls) so it inherits native styling. Chat UI; v1 ships **render-only citation chips** (§5 Layer 3 status note — evidence cards and open-in-chart navigation deferred, §11.8/T035). **Rejected alternatives:** a Summary *card* via `Card\SectionEvent` (renders below the fold, not prominent); a surgical `demographics.php` layout edit (works, but forfeits the clean drop-in — the docs' preferred shape, AUDIT.md:235); an iframe (loses direct `window.top` access needed for §5 Layer 3 citation navigation, though same-origin would have allowed it). | `src/Events/PatientDemographics/RenderEvent.php`, `src/Core/ModulesApplication.php`, `interface/patient_file/summary/demographics.php` (`#container_div` anchor), `src/Common/Session/PatientSessionUtil.php` |
+| **Token handoff** | Design: a SMART-on-FHIR token scoped to the logged-in user and the open patient, short-lived, per-conversation. **V1 demo (disclosed downgrade, 2026-07-10):** the panel POSTs to a same-origin module relay (session-authenticated, CSRF-protected, per-request ACL check on the open patient) which presents a **service-account** OAuth2 token to the agent. Per-user SMART EHR-launch is deferred (T027; §11.10; PRD_EXCEPTIONS.md E2). | `src/RestControllers/AuthorizationController.php`, `src/RestControllers/SMART/ScopePermissionParser.php` |
 | **Agent service** | Python/FastAPI. Minimal explicit tool-use loop (no heavy multi-agent framework — single agent, small tool set; multi-agent adds coordination failure modes no use case requires). Pydantic schemas are the contract for every tool input/output — contracts are the source of truth, not the implementation. Correlation-ID middleware. OpenTelemetry instrumentation (vendor-neutral; §7). `/health` (process alive) and `/ready` (OpenEMR FHIR, LLM provider, trace backend reachable — real checks, not unconditional 200s). | new code, `agent/` |
 | **Tools (read-only)** | `get_patient_snapshot` — parallel fan-out fetching demographics, active meds, problems, allergies, recent labs, last encounter in one step (UC-1). Targeted tools: `search_observations`, `get_medication_history`, `get_encounters_since`, `search_documents`, `get_immunizations` (UC-2/3/4). All are FHIR API calls with the user's token; none writes. | `src/Services/FHIR/Fhir*Service.php` (Patient, MedicationRequest, Condition, AllergyIntolerance, Observation, Encounter, DocumentReference) |
 | **Verification layer** | See §5. | `src/ClinicalDecisionRules/Interface/`, `src/Services/DrugService.php` |
-| **Citation resolver** | Module-side endpoint (PHP, inside the co-pilot module) that maps a verified citation's FHIR uuid to its native chart location: `uuid_registry` → source table → row (native id, pid, encounter) → destination page per the §5 routing table. Returns a navigation descriptor (target URL + params + open mode) that the panel executes via the tab-framework JS. Read-only; runs in the user's session, so ACL applies to the lookup like any other read. | `src/Common/Uuid/UuidRegistry.php`, `src/Common/Uuid/UuidMapping.php`, `interface/main/tabs/js/tabs_view_model.js` |
+| **Citation resolver** | **Deferred (2026-07-11; T035 — designed and probe-verified, not in v1; see §11.8.)** Module-side endpoint (PHP, inside the co-pilot module) that maps a verified citation's FHIR uuid to its native chart location: `uuid_registry` → source table → row (native id, pid, encounter) → destination page per the §5 routing table. Returns a navigation descriptor (target URL + params + open mode) that the panel executes via the tab-framework JS. Read-only; runs in the user's session, so ACL applies to the lookup like any other read. | `src/Common/Uuid/UuidRegistry.php`, `src/Common/Uuid/UuidMapping.php`, `interface/main/tabs/js/tabs_view_model.js` |
 | **Audit + observability** | See §7. | `src/Common/Logging/EventAuditLogger.php`, `AuditConfig.php` |
 
 ## 3. Where the Agent Lives
@@ -148,7 +150,12 @@ Three trust boundaries, each with an explicit enforcement mechanism:
    read. Every FHIR call presents the requesting user's token, so OpenEMR's
    `AclMain` role checks and OAuth scope enforcement run on every read
    exactly as they would for any API client. Patient scoping uses the FHIR
-   controllers' patient-bound query pattern (`puuidBind`).
+   controllers' patient-bound query pattern (`puuidBind`). *V1 demo caveat
+   (disclosed):* the relay currently presents a **service-account** token, so
+   the acting user's authority is enforced at the relay seam (session + CSRF
+   + per-request ACL check on the open patient), not re-enforced per FHIR
+   read, and audit rows name the service user. Per-user SMART tokens restore
+   the boundary as designed — §11.10, T027, PRD_EXCEPTIONS.md E2.
 3. **Agent ↔ LLM provider:** BAA (assumed per project constraints) covering
    PHI in prompts; minimum-necessary applies — only the current patient's
    data, only categories relevant to the question.
@@ -234,22 +241,48 @@ would leave nothing deterministic to check against.
   decision deferred to measured data rather than guessed in advance.
 
 **Layer 2 — Domain constraints (hot path, rule-based).**
-- Medication-related responses run through OpenEMR's drug-interaction
-  checking and clinical decision rules (`DrugService`, CDR engine); flags are
-  attached to the response, attributed to the EMR's CDS rather than the
-  agent's judgment.
-- Known dependency, stated (AUDIT.md D3): interaction checking is only as
-  strong as the medication coding beneath it, and the audit found almost
-  none — `rxnorm_drugcode=NULL`, free-text titles, empty `drugs` tables. An
-  uncoded medication therefore yields an explicit "interaction check
-  unavailable — uncoded entry" flag, never a silent clean pass; requiring
-  coded entries is roadmap (§11.6).
+- **Corrected 2026-07-11, verified by live probe (PRD_EXCEPTIONS.md E1).**
+  The original plan — routing medication responses through OpenEMR's own
+  drug-interaction checking (`DrugService` / the `rx_show_drug_drug` path) —
+  is not achievable: the native check
+  (`controllers/C_Prescription.class.php:190-231`) calls the NLM RxNav
+  Interaction API, which NLM **retired in January 2024** (live probe:
+  HTTP 404); on that failure it renders **"No interactions found"** — a
+  silent clean pass, the exact failure mode this layer exists to prevent —
+  and it requires an uninstalled RxNorm table (`RXNCONSO`) that it uses only
+  to `LIKE`-match the first word of free-text drug names, ignoring the
+  stored RxNorm codes.
+- **V1's domain-constraint layer, as enforced:** the refusal boundary
+  (USER.md §4 — no dosing, treatment, or diagnosis); deterministic
+  numeric/date verification of every claim against its cited resource
+  (Layer 1 — a response that contradicts the underlying data is stripped);
+  medication reconciliation with explicit conflict flags across disagreeing
+  source tables, never silently resolved; a deterministic **drug–allergy
+  name-level cross-check** (T033), attributed to the data rather than the
+  agent's judgment, its no-cross-reactivity limit disclosed in its own
+  status vocabulary; and explicit unchecked markers (`unavailable_uncoded`,
+  `not_run`) wherever a check could not run — never a silent clean pass.
+- Full drug–drug checking requires sourcing an interaction knowledge base
+  (the retired API's data came from ONCHigh + DrugBank; RxNorm itself holds
+  no interaction pairs) — roadmap (§11.11, T034).
+- Data note, superseding AUDIT.md D3 for the current dataset: post-Synthea
+  seed, ~91% of `prescriptions` rows and ~99% of `lists` medications carry
+  real RxNorm codes — the blocker is the knowledge source, not the coding.
+  The uncoded tail keeps the explicit `unavailable_uncoded` flag; requiring
+  coded entries remains roadmap (§11.6).
 
 **Layer 3 — Citation presentation (panel-side; show the proof, then link to
 it).** The `[ResourceType/id]` token is the machine layer — it exists for the
 Layer-1 verifier, not the physician; a raw uuid is unreadable and
 un-actionable in a 90-second window. After verification, the panel replaces
 each token with a three-tier UI:
+
+> **Status (2026-07-11):** v1 ships tier 1 only — the **chip**, render-only
+> and inert. The evidence card and open-in-chart navigation are **deferred**
+> (T035): a scope cut, not a PRD gap — the PRD requires claims be traceable
+> to specific records, which the chip provides; navigation traces only to
+> this document. The probe-verified design below is preserved for
+> reactivation. Consequences restated in §11.8.
 
 - **Chip (always visible):** type icon + human identifier + date, rendered
   from the cited resource — `A1c 8.2% · 2026-05-14 · LabCorp`,
@@ -331,7 +364,9 @@ Directional/semantic errors beyond parseable numerics are measured by an
 **offline LLM-as-judge entailment eval** over a growing test set, not gated
 per-request: an in-path judge would roughly double latency and add a second
 model to trust. The eval suite (§8) is weighted toward exactly this failure
-class because it is the one the hot path cannot fully catch.
+class because it is the one the hot path cannot fully catch. (Status: the
+eval harness reserves this check name and fails loud if a case references it
+— the judge itself is roadmap, not yet implemented; §11.2.)
 
 ## 6. Speed vs. Completeness
 
@@ -346,11 +381,15 @@ which future performance changes are measured.
 Design levers:
 - **One snapshot tool, parallel fan-out** (UC-1): the default question costs
   one agent step, not five sequential tool calls.
-- **Streaming** so reading starts before generation ends.
+- **Streaming** so reading starts before generation ends. (The service
+  exposes buffered SSE — verification completes before claim content is
+  emitted; the v1 panel renders a single JSON response, a deliberate demo
+  simplification.)
 - **Depth on demand** (UC-2): the agent does not exhaustively mine the chart
   up front; follow-ups trigger targeted tools.
-- **Model tiering:** cheaper/faster tier for routing and tool-argument
-  extraction; stronger tier for synthesis.
+- **Model tiering (roadmap, not in v1):** v1 runs a single model; a
+  cheaper/faster routing tier is the first cost/latency optimization lever,
+  priced in the cost analysis rather than shipped.
 - **Uncertainty communicated, not hidden:** partial results ship with an
   explicit statement of what's missing.
 
@@ -364,8 +403,9 @@ re-loads all ~500 globals from the DB on every request, so a 6-way parallel
 fan-out pays that ~100–300ms tax six times with zero reuse. Consequences for
 the design: (a) the snapshot tool's parallelism helps wall-clock but not the
 per-call fixed cost, so a **cached read model / a bootstrap short-circuit for
-token-auth FHIR requests is the highest-leverage optimization** — promoted to
-an early performance task, not a scale-tier concern; (b) labs are the slowest
+token-auth FHIR requests is the highest-leverage optimization** — identified,
+not implemented in v1; it stays roadmap, to be revisited against measured
+load-test data (T030) rather than built speculatively; (b) labs are the slowest
 resource because `procedure_result` has no patient index (`sql/database.sql:10493`,
 a 3-table join to reach `pid`), so the snapshot fetches labs on its own timeout
 and degrades gracefully if they lag; (c) the snapshot path must **not** request
@@ -475,8 +515,9 @@ Each alert documents its on-call response.
 
 **Runnable API collection:** a Bruno collection, versioned in the repo like
 the eval fixtures, covers `/chat`, `/health`, `/ready`, and the module's
-citation-resolver and audit-bridge endpoints — every core workflow
-exercisable without reading source.
+audit-bridge endpoint — every core workflow exercisable without reading
+source. (The citation-resolver endpoint was deferred with navigation,
+2026-07-11 — T035; its request joins the collection if that ships.)
 
 ## 8. Evaluation Plan
 
@@ -504,7 +545,8 @@ boundary, an invariant, or a regression risk (no happy-path-only suite):
   dates must render as "unknown," never fed to date math.
 - **Entailment (offline judge):** cited-but-misstated claims — the failure
   class the hot path can't fully catch — measured as a rate, tracked across
-  prompt/model changes.
+  prompt/model changes. (Roadmap: the harness reserves the check name and
+  fails loud if referenced; the judge is not yet implemented — §11.2.)
 - **Regressions:** every bug found in development becomes a pinned case.
 
 Ground truth comes from the synthetic patient set (demo/Synthea data only,
@@ -522,7 +564,7 @@ suite (§7 portability rules).
 
 | Decision | Choice | Rejected | Why |
 |---|---|---|---|
-| LLM | Claude (BAA-compatible; strong tool use) — tiered: fast model for routing, stronger for synthesis | Self-hosted open source | Self-hosting eliminates the BAA question but its quality/ops cost isn't justified in a one-week sprint with BAAs assumed; revisit at scale. |
+| LLM | Claude (BAA-compatible; strong tool use). V1 runs a single model; tiering (fast routing / stronger synthesis) is the first cost lever, priced in the cost analysis (§6) | Self-hosted open source | Self-hosting eliminates the BAA question but its quality/ops cost isn't justified in a one-week sprint with BAAs assumed; revisit at scale. |
 | Agent framework | Minimal explicit tool-use loop | LangGraph-scale orchestration; multi-agent | Single agent, ~6 tools: a loop I can fully explain beats a framework I'd debug under deadline. No use case requires multi-agent coordination. |
 | LLM client | Official Anthropic Python SDK, behind an `LLMClient` port | Raw HTTP against the Messages API; the SDK's built-in `tool_runner` | Hand-rolling the wire format buys nothing and owns the drift. The SDK lives in one adapter implementing the port — the same containment used for OTel (§7), so the loop imports no vendor SDK and the whole suite runs against a scripted fake with no network. The SDK's `tool_runner` would drive the loop for us, but §4's patient binding must read as one obvious line of our own code, not a hook overriding a runner's pending tool call; the retry-once-then-fallback and step-cap rules are likewise the control flow we want pinned by tests. |
 | Generation determinism | None — steer with the prompt | `temperature=0` | Sampling parameters (`temperature`, `top_p`, `top_k`) are rejected by current Claude models, and `temperature=0` never guaranteed identical outputs anyway. This is why §5's verification is deterministic and the *generator* is not: we do not depend on reproducible generation, we depend on a deterministic, non-LLM check over whatever the generator produced. |
@@ -583,14 +625,15 @@ whose gaps are documented:
    before the browser panel is exposed cross-origin; the JS-readable session
    cookie and off-by-default `cookie_secure` are hardened with them (§4).
    Tracked as hardening tasks the agent work depends on.
-8. **Citation deep-link coverage is uneven, by OpenEMR's own geography**
-   (§5 routing table): there is no per-prescription page, and lab/issue
-   destinations are dialogs rather than chart tabs. The routing table makes
-   coverage enumerable — "which citation types are clickable" is a checklist,
-   not a claim — and unsupported types degrade to scroll-and-highlight in the
-   summary, never a dead link. The evidence card, which needs no navigation
-   at all, is the primary verification surface precisely so these gaps stay
-   cosmetic.
+8. **Citation navigation and evidence cards are deferred entirely
+   (2026-07-11; T035).** v1 citations are render-only chips — type, human
+   identifier, date — which satisfy the PRD's traceability requirement;
+   click-to-navigate and the evidence card trace only to this document's
+   §5 Layer 3 and were cut for the deadline as scope, not as a requirement
+   exception. The probe-verified resolver and routing design (card ids,
+   collapse mechanics, open modes) is preserved in the T017/T035 tickets for
+   reactivation. In v1, the verification surface is the chip plus Layer 1's
+   stripped-content annotations and coverage disclosures.
 9. **Panel visual polish is deliberately deferred.** v1 reuses OpenEMR's
    standard Bootstrap/card classes so the panel inherits the native look with
    minimal custom CSS — chosen so any later restyle flows into the panel for
@@ -598,3 +641,18 @@ whose gaps are documented:
    the panel with it). An app-wide override of OpenEMR's defaults is explicitly
    *not* pursued — high blast radius, exactly the platform-entanglement risk
    AUDIT.md:257 warns against; a dashboard-scoped restyle is the safe form.
+10. **Demo attribution: the relay presents a service-account token** (T021,
+    a disclosed downgrade — PRD_EXCEPTIONS.md E2). Audit and disclosure rows
+    name the service user, not the acting clinician; the compensating
+    controls are the relay seam's session + CSRF + per-request ACL check and
+    the per-invocation audit trail. Roadmap: per-user SMART EHR-launch
+    tokens behind the existing `ServiceTokenProvider` seam (T027,
+    probe-first).
+11. **Drug–drug interaction checking is not live** (PRD_EXCEPTIONS.md E1).
+    OpenEMR's native path is dead upstream — the NLM Interaction API was
+    retired in January 2024, and the native code silent-passes on that
+    failure (§5 Layer 2, verified by probe) — and a real check requires a
+    licensed interaction knowledge source. v1 enforces the Layer 2
+    constraint set (refusal boundary, numeric/date verification, conflict
+    flags, drug–allergy cross-check, explicit unchecked markers). Roadmap:
+    T034 (probe-first knowledge-source selection).

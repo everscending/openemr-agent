@@ -291,6 +291,20 @@ deduplicate/interaction-check, may mis-map deprecated codes. *Mitigation:*
 require RxNorm on meds, SNOMED/ICD10 on problems; flag uncoded entries
 low-confidence.
 
+> *Update 2026-07-11 — partially stale; re-verified against the live DB.*
+> This finding described the original 3-patient demo set. After the Synthea
+> seed the dataset is largely coded: 689 `prescriptions` rows (~91% with real
+> RxNorm CUIs), 633 `lists` medications (~99% coded). Still true: `drugs` and
+> `lists_medication` remain empty, and the original patients (1–2) — used by
+> several fixtures — remain free-text, so the failure mode survives for the
+> uncoded tail. Separately, a live probe found OpenEMR's native drug–drug
+> check unusable *regardless of coding*: it calls the NLM RxNav Interaction
+> API, retired January 2024 (HTTP 404 today), and on that failure renders
+> "No interactions found" — a silent clean pass
+> (`controllers/C_Prescription.class.php:190-231`). The interaction-check
+> blocker is therefore the knowledge source, not the data. See
+> PRD_EXCEPTIONS.md E1 and ARCHITECTURE.md §5 Layer 2.
+
 **D4 — Multiple authoritative sources disagree (consistency).** Medications
 live in `prescriptions`, `lists` (type=medication), and `lists_medication`,
 with no reconciling foreign key. In the demo, patient 2's Lisinopril is
