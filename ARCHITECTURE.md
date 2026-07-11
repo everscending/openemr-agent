@@ -282,11 +282,12 @@ where each resource type lands and how it opens:
 | FHIR resource | Source table | Chart destination | Open mode |
 |---|---|---|---|
 | Encounter | `form_encounter` | `demographics.php?set_pid&set_encounterid` → encounter tab | tab navigation |
-| Condition / AllergyIntolerance | `lists` | `add_edit_issue.php?issue=<id>` | dialog (context preserved) |
+| Condition | `lists` (type=medical_problem) | Medical Problems summary card (`#medical_problem_ps_expand`) | scroll-to + highlight (expand card if collapsed) |
+| AllergyIntolerance | `lists` (type=allergy) | Allergies summary card (`#allergy_ps_expand`) | scroll-to + highlight (expand card if collapsed) |
 | Observation / DiagnosticReport | `procedure_result` → parent `procedure_order` | `single_order_results.php?orderid=<id>` | dialog |
 | DocumentReference | `documents` | `controller.php?document&view&doc_id&patient_id` | dialog |
-| MedicationRequest | `prescriptions` | no per-row page exists in OpenEMR | scroll-to + highlight in the summary medications card |
-| Immunization | `immunizations` | summary immunizations card | scroll-to + highlight |
+| MedicationRequest | `prescriptions` | Medications summary card (`#medication_ps_expand`) | scroll-to + highlight (expand card if collapsed) |
+| Immunization | `immunizations` | Immunizations summary card (`#immunizations_ps_expand`) | scroll-to + highlight (expand card if collapsed) |
 
 Two OpenEMR constraints shape the open-mode column. First, there are no
 bookmarkable deep links: `main.php` rejects foreign query params (single-use
@@ -298,6 +299,32 @@ active pid/encounter session state and replaces the physician's current view;
 mid-pre-review that costs more than the citation is worth, so destinations
 open as dialogs wherever OpenEMR supports it, and full tab navigation is
 reserved for the targets that genuinely need native context (encounters).
+Third — settled 2026-07-10, verified by live probe against the actual
+Dashboard — **Condition and AllergyIntolerance moved from a dialog
+(`add_edit_issue.php`) to the same scroll-to + highlight treatment as
+MedicationRequest/Immunization**: both already have their own always-present
+summary cards directly on the Dashboard (Allergies, Medical Problems), so
+opening an *edit* dialog just to point at a citation is more intrusive than
+necessary — a highlight is enough, and it doesn't imply the user should edit
+anything. Mechanics for every scroll-to + highlight destination: each
+Dashboard card (`templates/patient/card/card_base.html.twig`) is a Bootstrap 4
+collapse component — a toggle `<a data-toggle="collapse"
+data-target="#<id>">` and a body `<div id="<id>" class="card-text
+collapse[ show]">`. Live-probed: many cards default collapsed (Labs, Vitals,
+Demographics, etc.), so "expand if collapsed" is a real, not theoretical,
+case. Clicking the toggle `<a>` (a real `.click()`, not a jQuery `.collapse()`
+plugin call — probed live and confirmed more reliably wired) toggles the
+`show` class with Bootstrap's own transition, regardless of collapsed state.
+Within the card, individual rows (`templates/patient/card/{allergies,
+medical_problems,medication}.html.twig`) carry **no identifying attribute** —
+each is a plain `.list-group-item` with only display text. Rather than a core
+edit to add one, the resolver returns the resource's display title (already
+known from the row lookup) and the panel JS matches the row by text content —
+approximate, but a soft failure (worst case: card expands, nothing
+highlights) consistent with this feature being a visual aid, not an access
+decision. The highlight itself: a green border applied to the matched row,
+removed via a CSS `transition` on `opacity` to `0` over 3 seconds — no
+blink/pulse, kept deliberately simple.
 citation-existence verifies **grounding, not entailment** — the model could
 cite a real lab while misstating its direction ("improving" vs. worsening).
 Directional/semantic errors beyond parseable numerics are measured by an
