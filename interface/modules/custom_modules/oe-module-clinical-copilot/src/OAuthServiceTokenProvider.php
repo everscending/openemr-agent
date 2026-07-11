@@ -59,7 +59,7 @@ final class OAuthServiceTokenProvider implements ServiceTokenProvider
 
     public function getToken(): string
     {
-        // TODO(SMART): per-user token, see deferred ticket
+        // TODO(SMART): per-user token, see deferred ticket T027
         $clientId = $this->ensureProvisionedClientId();
         return $this->passwordGrant($clientId);
     }
