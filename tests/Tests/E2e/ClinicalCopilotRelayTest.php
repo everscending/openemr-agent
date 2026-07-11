@@ -47,6 +47,8 @@ class ClinicalCopilotRelayTest extends PantherTestCase
     use BaseTrait;
     use LoginTrait;
 
+    private $crawler;
+
     private const MODULE_DIRECTORY = 'oe-module-clinical-copilot';
     private const RELAY_PATH =
         '/interface/modules/custom_modules/oe-module-clinical-copilot/public/copilot-relay.php';
@@ -115,8 +117,31 @@ class ClinicalCopilotRelayTest extends PantherTestCase
         parent::tearDown();
     }
 
+    /**
+     * Upsert, not a blind UPDATE: a sibling suite's teardown (T016's
+     * ClinicalCopilotAuditBridgeApiTest) unconditionally DELETEs this same
+     * shared row, so a suite that only ever UPDATEs it can silently affect
+     * zero rows if that suite ran first in the same session. Insert the row
+     * (mirroring T023's verified production shape -- type=0 is
+     * ModulesApplication::MODULE_TYPE_CUSTOM, the column core's gate actually
+     * checks) when absent, else update mod_active on the existing row.
+     */
     private function setModuleActive(int $active): void
     {
+        $existing = QueryUtils::querySingleRow(
+            'SELECT `mod_id` FROM `modules` WHERE `mod_directory` = ?',
+            [self::MODULE_DIRECTORY]
+        );
+        if (!is_array($existing)) {
+            QueryUtils::sqlStatementThrowException(
+                'INSERT INTO `modules` '
+                    . '(`mod_name`, `mod_directory`, `mod_active`, `mod_ui_active`, `type`, '
+                    . '`directory`, `date`, `sql_run`, `sql_version`, `acl_version`) '
+                    . 'VALUES (?, ?, ?, 0, 0, \'\', NOW(), 1, \'0\', \'\')',
+                ['Clinical Co-Pilot', self::MODULE_DIRECTORY, $active]
+            );
+            return;
+        }
         QueryUtils::sqlStatementThrowException(
             'UPDATE `modules` SET `mod_active` = ? WHERE `mod_directory` = ?',
             [$active, self::MODULE_DIRECTORY]
