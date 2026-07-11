@@ -132,3 +132,16 @@
 #copilot-panel .oe-copilot__input-group {
     flex: 0 0 auto;
 }
+
+.oe-copilot__status {
+    margin-top: 0.5rem;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.85rem;
+    color: #842029;
+    background: #f8d7da;
+    border-radius: 0.25rem;
+}
+
+.oe-copilot__status:empty {
+    display: none;
+}
