@@ -123,6 +123,25 @@ services:
       interval: 1m
       timeout: 5s
       retries: 3
+  copilot:
+    restart: unless-stopped
+    build:
+      context: ../../agent
+      dockerfile: Dockerfile
+    ports:
+    - "${WT_COPILOT_PORT:-8380}:8080"
+    environment:
+      # FHIR base the agent's tools/readiness probe read against — the
+      # openemr container, reachable by its compose service name on the
+      # shared docker network. Plain HTTP: the openemr container's TLS cert
+      # is self-signed, and apis/dispatch.php does not force HTTPS.
+      OPENEMR_FHIR_BASE_URL: http://openemr/apis/default/fhir
+      # T016 audit-bridge endpoint (PHP module, same openemr container).
+      AUDIT_BRIDGE_URL: http://openemr/interface/modules/custom_modules/oe-module-clinical-copilot/public/audit-bridge.php
+      # Sourced from the developer's host shell — never hardcoded, never
+      # committed. The Anthropic SDK reads this directly when no key is
+      # passed to the client.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
   selenium:
     restart: always
     image: selenium/standalone-chromium:149.0.7827.155@sha256:9b10a9ccf68e3a18153a68a0705577157e20665d88d00bd4393a42e5839aa3d3
