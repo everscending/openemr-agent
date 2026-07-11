@@ -62,12 +62,25 @@ use OpenEMR\Services\UserService;
 use Psr\Log\NullLogger;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\Session\Session;
+use Symfony\Component\HttpFoundation\Session\SessionInterface;
 use Symfony\Component\HttpFoundation\Session\Storage\MockFileSessionStorage;
 
 final class SmartLaunchTokenProvider implements ServiceTokenProvider
 {
     /** Marker name the single dedicated launch/patient OAuth2 client is registered under. */
     public const CLIENT_NAME = 'oe-module-clinical-copilot smart-launch service';
+
+    /** Session key the per-patient minted-token cache is stored under. */
+    private const SESSION_CACHE_KEY = 'copilot_fhir_token';
+
+    /** The mint sets a 1h token expiry; mirror it as the cached entry's lifetime. */
+    private const TOKEN_TTL_SECONDS = 3600;
+
+    /**
+     * Safety margin: a cached token with less than this much life left is re-minted
+     * rather than reused, so a token never expires mid-conversation-turn.
+     */
+    private const EXPIRY_SAFETY_MARGIN_SECONDS = 300;
 
     /** The eight FHIR resource types the agent's tools read, patient-scoped. */
     private const RESOURCE_TYPES = [
@@ -79,14 +92,87 @@ final class SmartLaunchTokenProvider implements ServiceTokenProvider
         private readonly int $clinicianUserId,
         private readonly string $oauthBaseUrl = 'https://localhost',
         private readonly int $timeoutSeconds = 15,
+        private readonly ?SessionInterface $session = null,
     ) {
     }
 
+    /**
+     * Return a bearer bound to the acting clinician + $patientUuid.
+     *
+     * When a relay session is present, the minted bearer is cached in it keyed by
+     * patient uuid and reused (BYTE-IDENTICALLY) within its TTL, so a multi-turn
+     * conversation's token hash stays stable and T011's caller binding holds. The
+     * session IS the clinician, so keying by patient never crosses clinician or
+     * patient. On a cache MISS (no session, no entry, or an entry within the expiry
+     * safety margin) the guardrails run and a fresh token is minted — a
+     * guardrail-failing user never mints and never caches, still failing closed.
+     */
     public function getToken(string $patientUuid): string
     {
+        $cached = $this->cachedToken($patientUuid);
+        if ($cached !== null) {
+            return $cached;
+        }
+
         $clinicianUuid = $this->resolveEligibleClinicianUuid();
         $clientId = $this->ensureProvisionedClientId();
-        return $this->mint($clientId, $clinicianUuid, $patientUuid);
+        $token = $this->mint($clientId, $clinicianUuid, $patientUuid);
+
+        $this->cacheToken($patientUuid, $token);
+
+        return $token;
+    }
+
+    /**
+     * Return the cached bearer for $patientUuid if the session holds one that is not
+     * within the expiry safety margin; otherwise null (a cache miss -> re-mint).
+     */
+    private function cachedToken(string $patientUuid): ?string
+    {
+        if ($this->session === null) {
+            return null;
+        }
+
+        $cache = $this->session->get(self::SESSION_CACHE_KEY);
+        if (!is_array($cache) || !isset($cache[$patientUuid]) || !is_array($cache[$patientUuid])) {
+            return null;
+        }
+
+        $entry = $cache[$patientUuid];
+        $token = $entry['token'] ?? null;
+        $expiresAt = $entry['exp'] ?? null;
+        if (!is_string($token) || $token === '' || !is_int($expiresAt)) {
+            return null;
+        }
+
+        if (($expiresAt - time()) < self::EXPIRY_SAFETY_MARGIN_SECONDS) {
+            return null;
+        }
+
+        return $token;
+    }
+
+    /**
+     * Cache a freshly minted, already-guardrail-validated bearer for $patientUuid in
+     * the relay session with a companion expiry. No-op without a session.
+     */
+    private function cacheToken(string $patientUuid, string $token): void
+    {
+        if ($this->session === null) {
+            return;
+        }
+
+        $cache = $this->session->get(self::SESSION_CACHE_KEY);
+        if (!is_array($cache)) {
+            $cache = [];
+        }
+
+        $cache[$patientUuid] = [
+            'token' => $token,
+            'exp' => time() + self::TOKEN_TTL_SECONDS,
+        ];
+
+        $this->session->set(self::SESSION_CACHE_KEY, $cache);
     }
 
     /**

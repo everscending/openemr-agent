@@ -56,7 +56,7 @@ $clinicianUserId = (int) $session->get('authUserID');
 
 $controller = new CopilotRelayController(
     new HttpCopilotAgentChatClient($agentBaseUrl, 120),
-    new SmartLaunchTokenProvider($clinicianUserId, $oauthBaseUrl),
+    new SmartLaunchTokenProvider($clinicianUserId, $oauthBaseUrl, session: $session),
     new SessionPatientAccessGuard(),
     ServiceContainer::getLogger(),
 );
