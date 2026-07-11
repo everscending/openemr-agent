@@ -133,6 +133,24 @@
     flex: 0 0 auto;
 }
 
+/*
+ * Citation chips (T018, render-only -- navigation split to T035). Reuses
+ * Bootstrap's .badge/.badge-pill for chrome (the JS also sets those classes
+ * alongside this BEM one); the rules here only add the module-scoped spacing
+ * and make explicit -- beyond what .badge already implies -- that a chip is
+ * not a clickable control: no pointer cursor, no hover/focus affordance.
+ * There is no click handler wired to these chips at all (T018); this is
+ * belt-and-suspenders visual confirmation of that inertness.
+ */
+#copilot-panel .oe-copilot__citation-chip {
+    display: inline-block;
+    margin: 0 0.15rem;
+    font-weight: 500;
+    cursor: default;
+    white-space: normal;
+    vertical-align: baseline;
+}
+
 .oe-copilot__status {
     margin-top: 0.5rem;
     padding: 0.4rem 0.6rem;
