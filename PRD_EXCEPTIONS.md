@@ -77,36 +77,12 @@ interactions found"), and closure or narrowing of this entry.
 
 ---
 
-## E2 — Per-user identity on agent requests (authorization & audit attribution)
-
-**Date / decided by:** 2026-07-10, project owner.
-
-**PRD requirement (Authorization & Access Control):** "The system must know
-who is asking and enforce appropriate access — not assume all users are
-trusted."
-
-**What is implemented instead:** the panel→agent relay (T021) authenticates
-the clinician's OpenEMR session, enforces CSRF and a patient-access ACL check
-per request, and binds the conversation to the open patient — but forwards a
-**service-account OAuth2 bearer** (the `admin` user) to the agent's FHIR
-tools rather than a per-user SMART token. Consequences, disclosed rather than
-hidden:
-- FHIR reads execute with the service account's (admin's) authority, not the
-  asking user's — OpenEMR's ACL is enforced at the relay seam per request, but
-  not re-enforced per FHIR read with the actual user's role.
-- The T016 audit and §164.528 disclosure rows name the service user, not the
-  acting clinician. Nothing fakes a per-user appearance; the limitation is
-  marked in code (`TODO(SMART)` at the token acquisition site).
-
-**Why:** the per-user SMART EHR-launch flow is unverified against the live
-stack (a non-interactive launch from an authenticated session may not be
-achievable at all) and could not be probed and built inside the sprint
-deadline. A disclosed downgrade was chosen over an unverified mechanism.
-
-**Path to full implementation:** ticket **T027** (deferred, probe-first) — a
-per-user SMART EHR-launch token provider swapped in behind the existing
-`ServiceTokenProvider` seam, restoring true acting-human attribution
-end-to-end.
+*(E2 — per-user identity / audit attribution on agent requests — CLOSED
+2026-07-11 by ticket T027, which replaced T021's service-account bearer with a
+per-clinician, per-patient SMART token minted server-side. FHIR reads now
+execute patient-scoped and the audit/§164.528 rows name the acting clinician.
+This ledger tracks only open exceptions, so the entry was removed; see the
+T027 commit and the TDD ledger for the record.)*
 
 ---
 
