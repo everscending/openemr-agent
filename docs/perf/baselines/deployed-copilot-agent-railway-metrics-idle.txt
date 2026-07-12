@@ -1,0 +1,33 @@
+
+Metrics for copilot-agent in production (last 1h)
+
+  Resource Usage
+  ─────────────────────────────────────────────────────────────────────
+             current            avg             max             limit
+  CPU       < 0.01 vCPU (0%)   < 0.01 vCPU     < 0.01 vCPU     8.0 vCPU
+  Memory    80 MB (1%)         79 MB           80 MB           8.00 GB
+
+  Public Network Traffic
+  ──────────────────────────────────────────────
+  Egress       0 MB                    avg: 0.00 MB          max: 0.00 MB
+  Ingress      0 MB                    avg: 0.00 MB          max: 0.00 MB
+
+  Disk Usage
+  ──────────────────────────────────────────────
+  Current      0 MB                    avg: 0 MB             max: 0 MB
+
+  HTTP Requests (12 total)
+  ──────────────────────────────────────────────
+  Total        12
+  2xx          0 (0.0%)
+  3xx          0 (0.0%)
+  4xx          0 (0.0%)
+  5xx          12 (100.0%)
+  Error Rate   100.0%
+
+  Latency      p50: 27ms   p90: 27ms   p95: 27ms   p99: 27ms
+
+  Recent Deployments
+  ──────────────────────────────────────────────
+  2026-07-11 21:00 UTC   f463f442   SUCCESS
+

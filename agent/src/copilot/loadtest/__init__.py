@@ -19,6 +19,15 @@ from copilot.loadtest.results import (
     parse_results,
     stats_to_dict,
 )
+from copilot.loadtest.relay_transport import (
+    RelayAuthError,
+    RelayContext,
+    RelayLevelReport,
+    RelayUser,
+    fetch_relay_context,
+    run_relay_level,
+    run_relay_virtual_user,
+)
 from copilot.loadtest.runner import (
     LevelReport,
     UserContext,
@@ -33,6 +42,10 @@ __all__ = [
     "AbortGuard",
     "LevelReport",
     "LoadTestStats",
+    "RelayAuthError",
+    "RelayContext",
+    "RelayLevelReport",
+    "RelayUser",
     "RequestResult",
     "ResultsParseError",
     "SCENARIOS",
@@ -42,9 +55,12 @@ __all__ = [
     "UC2_FOLLOWUP",
     "UserContext",
     "compute_ramp_delays",
+    "fetch_relay_context",
     "load_results_ndjson",
     "parse_results",
     "run_level",
+    "run_relay_level",
+    "run_relay_virtual_user",
     "run_virtual_user",
     "stats_to_dict",
 ]

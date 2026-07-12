@@ -1,0 +1,21 @@
+timestamp_utc,container,cpu_pct,mem_usage,mem_pct,net_io
+2026-07-12T05:55:35Z,development-easy-copilot-1,0.20%,74.11MiB / 23.68GiB,0.31%,915kB / 1.27MB
+2026-07-12T05:55:35Z,development-easy-openemr-1,0.45%,884.6MiB / 23.68GiB,3.65%,485MB / 201MB
+2026-07-12T05:55:40Z,development-easy-copilot-1,0.22%,74.11MiB / 23.68GiB,0.31%,915kB / 1.27MB
+2026-07-12T05:55:40Z,development-easy-openemr-1,62.80%,893.6MiB / 23.68GiB,3.69%,487MB / 202MB
+2026-07-12T05:55:45Z,development-easy-copilot-1,0.77%,74.39MiB / 23.68GiB,0.31%,972kB / 1.35MB
+2026-07-12T05:55:45Z,development-easy-openemr-1,58.98%,929.9MiB / 23.68GiB,3.84%,496MB / 205MB
+2026-07-12T05:55:50Z,development-easy-copilot-1,0.80%,74.68MiB / 23.68GiB,0.31%,1.04MB / 1.43MB
+2026-07-12T05:55:50Z,development-easy-openemr-1,97.18%,1021MiB / 23.68GiB,4.21%,503MB / 208MB
+2026-07-12T05:55:55Z,development-easy-copilot-1,0.86%,74.2MiB / 23.68GiB,0.31%,1.11MB / 1.54MB
+2026-07-12T05:55:55Z,development-easy-openemr-1,67.37%,1.05GiB / 23.68GiB,4.43%,514MB / 212MB
+2026-07-12T05:56:00Z,development-easy-copilot-1,1.50%,74.48MiB / 23.68GiB,0.31%,1.18MB / 1.66MB
+2026-07-12T05:56:00Z,development-easy-openemr-1,55.03%,1.05GiB / 23.68GiB,4.44%,517MB / 213MB
+2026-07-12T05:56:05Z,development-easy-copilot-1,0.95%,74.2MiB / 23.68GiB,0.31%,1.22MB / 1.73MB
+2026-07-12T05:56:05Z,development-easy-openemr-1,18.37%,980.8MiB / 23.68GiB,4.05%,519MB / 214MB
+2026-07-12T05:56:10Z,development-easy-copilot-1,1.59%,74.43MiB / 23.68GiB,0.31%,1.25MB / 1.8MB
+2026-07-12T05:56:10Z,development-easy-openemr-1,26.65%,989.5MiB / 23.68GiB,4.08%,520MB / 214MB
+2026-07-12T05:56:15Z,development-easy-copilot-1,0.28%,74.18MiB / 23.68GiB,0.31%,1.27MB / 1.83MB
+2026-07-12T05:56:15Z,development-easy-openemr-1,1.88%,885.9MiB / 23.68GiB,3.65%,521MB / 214MB
+2026-07-12T05:56:20Z,development-easy-copilot-1,0.24%,74.18MiB / 23.68GiB,0.31%,1.27MB / 1.83MB
+2026-07-12T05:56:20Z,development-easy-openemr-1,0.45%,885.5MiB / 23.68GiB,3.65%,521MB / 214MB

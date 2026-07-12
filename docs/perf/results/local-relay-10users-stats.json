@@ -1,0 +1,9 @@
+{
+  "total_requests": 20,
+  "error_count": 0,
+  "error_rate": 0.0,
+  "rate_limited_count": 0,
+  "p50_ms": 7618.189454078674,
+  "p95_ms": 10633.88195037842,
+  "p99_ms": 11835.474090576168
+}
