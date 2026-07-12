@@ -1,10 +1,18 @@
 # T030 — Load/stress tests + baseline resource profiles
 
-Status: **harness complete (both transports) and proven end-to-end locally;
-the two PRD-mandated deployed measurement levels (10 and 50 concurrent
-users) still could not be obtained** — for a different, narrower reason
-than originally reported. Read "Corrections" and "What is still missing,
-and why" before anything else.
+Status: **complete.** Harness built and proven on both transports; both
+PRD-mandated deployed levels (10 and 50 concurrent users, PRD.md:338-339)
+were run against the live deployment on 2026-07-12 and are recorded in §2.
+
+**The 50-user level took the deployed instance down.** OpenEMR's audit `log`
+table filled the 500 MB MySQL volume (`1114 The table 'log' is full`), and the
+instance 500'd on every request until manually recovered. That is the headline
+result, not a footnote — and it means **the 50-user level must not be re-run
+against the deployed instance until the volume is grown / the log rotated**
+(§2.1). Notably, the LLM provider never rate-limited us: **zero 429s** at either
+level.
+
+Read §2 before anything else.
 
 ## Corrections (2026-07-12, orchestrator-directed re-scope)
 
@@ -86,59 +94,102 @@ this at the transport seam (the actual form body), and the live local run
 below is a second, independent confirmation: it returns real per-patient
 data, which a rejected/misrouted `patient_id` could not.
 
-## 2. What is still missing, and why
+## 2. Headline finding — what actually breaks at 50 users
 
-**The two PRD-mandated levels (10 and 50 concurrent users against the
-deployed instance, PRD.md:338-339) were still not obtained** — but the
-blocker is now narrower and different in kind from before:
+Both PRD-mandated levels (PRD.md:338-339) were run against the **deployed**
+system on 2026-07-12, through the real relay path, against the demo patient
+that has real clinical data (`pid=21`, 4 active medications — see §2.3).
 
-**The deployed OpenEMR's real admin credentials are not `admin`/`pass`.**
-A single-user auth probe against
-`https://openemr-production-472c.up.railway.app` with the documented
-default (`OE_LOAD_USER`/`OE_LOAD_PASS`, defaulting to `admin`/`pass` per
-this leg's instructions) failed cleanly: the harness's `relay_transport`
-correctly detected it (no `OE_COPILOT_*` markers on the post-login
-Dashboard fetch), recorded one `RelayAuthError` result rather than
-crashing, and the CLI exited non-zero with `LOGIN FAILED for 1/1 virtual
-user(s)`. This matches this project's own [[railway-deployment]] memory
-note: *"OpenEMR default `admin`/`pass` does not apply here; the admin
-password is the generated `OE_PASS` variable."* Per this leg's explicit
-instruction — **do not guess or brute-force passwords** — no further
-attempt was made. Running a 50-user level against the same wrong
-credentials would only reproduce the identical, uninformative failure 50
-times over.
+| Level | Requests | Errors | Error rate | 429s | p50 | p95 | p99 |
+|---|---|---|---|---|---|---|---|
+| **10 users** | 20 | 0 | **0.0%** | 0 | 13.81s | 17.55s | 19.95s |
+| **50 users** | 85 | 38 | **44.7%** | **0** | 7.70s | 18.41s | 19.19s |
 
-This is now a **credentials-only** gap, not a code, access, or availability
-gap:
+**The binding constraint is not the LLM, and not the agent. It is OpenEMR's
+audit log exhausting the database volume.**
 
-- The relay transport is fully built, tested, and independently proven
-  against the local stack (section 3) — logging in, scraping, and
-  completing a full multi-turn conversation through the identical relay
-  code path the deployed instance runs.
-- No production shell access, no file writes, no token minting, and no new
-  public surface were needed or attempted this leg.
-- The only missing input is the real `OE_PASS` value (or any other valid
-  deployed clinician credential) for `OE_LOAD_USER`/`OE_LOAD_PASS`.
+At 50 concurrent users the deployed system failed as follows:
 
-### Reproducing the deployed runs (once real credentials are available)
+```
+MySQL:   1114  The table 'log' is full
+OpenEMR: HTTP 500 on every request (incl. /interface/login/login.php)
+```
+
+The 38 errors decompose into **23 × HTTP 500** and **15 × login failure**
+(`RelayAuthError` — virtual users that could not even authenticate, with
+credentials that worked fine at the 10-user level). Both are the same
+cascade: OpenEMR writes an audit row per request; under 50 concurrent users
+the `log` table filled the **500 MB** `mysql-volume`, InnoDB could no longer
+extend the tablespace, and every subsequent query — including the login
+query — failed. **OpenEMR did not recover on its own** (12 consecutive polls
+over 3 minutes, all 500) and required manual intervention.
+
+Three consequences worth stating plainly:
+
+1. **Zero LLM rate-limiting.** `rate_limited_count: 0` at both levels — the
+   Anthropic provider never throttled us. The pre-run worry (a 429 wall,
+   ARCHITECTURE.md §10's ~10K inflection arriving early) **did not
+   materialise at this scale**. The abort guard, armed for exactly that, never
+   tripped: the 44.7% error rate sat just under its 50% threshold.
+2. **The wall is storage/audit-write capacity, not CPU and not the model.**
+   This sharpens §6's "bootstrap tax" claim: the *latency* floor is the PHP
+   bootstrap (see §4 — OpenEMR pins ~97% CPU while the agent idles at <5%),
+   but the *availability* wall under concurrency is the audit log filling the
+   DB volume. A co-pilot that audits every access (by design — ARCHITECTURE.md
+   §7) multiplies OpenEMR's own audit write volume, and the deployed volume was
+   not provisioned for it.
+3. **The 50-user p50 (7.70s) is LOWER than the 10-user p50 (13.81s) — this is
+   an artifact, not an improvement.** Failed requests (500s, auth failures)
+   return fast and drag the median down. Read p95/p99 (18.41s/19.19s) and the
+   error rate, never the p50, for this level.
+
+### 2.1 Remediation (not done by this ticket — it measures)
+
+Grow `mysql-volume` beyond 500 MB and/or add rotation/retention on OpenEMR's
+`log` table before any production-like concurrency. See T042 / ARCHITECTURE.md
+§6 roadmap. **Do not re-run the 50-user level against the deployed instance
+until that is done — it will take the demo down again.**
+
+### 2.2 Honest gap — the harness scores transport, not answer quality
+
+`RequestResult` records `status_code`/latency only. It has **no notion of the
+relay's `fallback` flag, nor of a T008 verification-stripped reply** — so a run
+in which every answer came back degraded would still score "0 errors". The
+latency and error-rate numbers above are valid; **"0 errors" is not a statement
+about answer quality.** Answer quality was verified *separately*, by probing the
+deployed relay by hand (real grounded replies with RxNorm codes and
+`MedicationRequest/...` citations). Closing this properly means recording
+`fallback` and a stripped-answer signature per request — a known follow-up.
+
+### 2.3 Patient selection is load-bearing
+
+An earlier pass ran both deployed levels against `pid=2`, which on the deployed
+DB is an **empty chart** (demographics only; every FHIR bundle ~200 bytes / zero
+entries). Those numbers (p50 7.86s, p95 9.90s, 0 errors at 50 users) measured an
+empty tool fan-out and were **discarded as unrepresentative** — they violate
+criterion 5 ("valid tokens/patient context so the run exercises tools and
+verification, not a fast-path"). The deployed and local databases hold
+**different patients**; the deployed patient with real data is `pid=21`. Always
+confirm the target patient has data before recording a run.
+
+### Reproducing the deployed runs
 
 ```bash
 export OE_LOAD_USER=admin
-export OE_LOAD_PASS=<the real deployed OE_PASS value>
+export OE_LOAD_PASS=<the real deployed OE_PASS value>   # not admin/pass
 cd agent
 uv run loadtest-relay \
   --base-url https://openemr-production-472c.up.railway.app \
-  --patient-pid 2 \
+  --patient-pid 21 \
   --users 10 --ramp-seconds 60 \
   --out ../docs/perf/raw/deployed-relay-10users.ndjson
-# then repeat with --users 50 --ramp-seconds 90 for the second mandated level.
+# 50-user level: --users 50 --ramp-seconds 90
+# WARNING: at 50 users this exhausts the 500 MB mysql-volume and takes the
+# deployed instance down (see §2). Grow the volume first.
 # The abort guard is armed by default (50% sustained-60s hard-error or
 # 429-dominance); a tripped run prints "ABORT GUARD TRIPPED: <reason>" to
 # stderr — record the wall, do not re-run the level repeatedly.
 ```
-
-No other change is needed — the harness, transport, and CLI are complete
-and were exercised end-to-end against the local stack below.
 
 ## 3. Recorded runs
 
@@ -211,8 +262,10 @@ This table is what motivated Correction 1 above: the agent's own resource
 trace shows a flat, idle-shaped container the whole time, not a crash — the
 5xx column here is the edge, not the app. These deployed numbers are
 **idle baselines, not load-test baselines** — they say nothing about
-concurrency behavior, and are not a substitute for section 2's still-owed
-10/50-user runs. CPU/memory are read-only Railway platform metrics
+concurrency behavior. The deployed *load* results live in §2; the deployed
+CPU/memory trace *under* load was not captured, because the 50-user run ended
+in a DB-exhaustion outage that took priority over metrics collection (an
+honest gap — no number is invented for it). CPU/memory are read-only Railway platform metrics
 (`railway metrics --service <name>`, no container shell); latency/error-rate
 for a real load run would instead come from the harness's own recorded
 results, exactly as in section 3.
@@ -220,15 +273,21 @@ results, exactly as in section 3.
 ## 5. Interpreted against ARCHITECTURE.md targets
 
 ARCHITECTURE.md §6 (~line 374): "first token < 3s; complete snapshot <
-10s; follow-ups < 5s; p95 < 15s." Using the relay-transport local runs
-(section 3), which now supersede the direct-chat runs as the "real path":
+10s; follow-ups < 5s; p95 < 15s." Judged against the **deployed** relay runs
+(§2) — the numbers PRD.md:338-339 actually asks for — with the local runs
+(§3) retained as the mechanism trace:
 
-| Target | Local relay result | Met? |
+| Target | Deployed result (10 users, real-data patient) | Met? |
 |---|---|---|
-| First token < 3s | **Not measurable by this harness.** The relay's `/chat` call is buffered JSON end-to-end (`copilot-panel.js` does a single `fetch().then(response.json())`, never SSE); there is no first-token event to observe from outside. Disclosed gap, unchanged from the previous pass. | N/A |
-| Complete snapshot < 10s | Smoke: 2 of 3 under 10s (8.67s, 8.83s), one at 10.12s. 10-user: 8 of 10 under 10s; two exceeded it (10.55s, 12.14s), with the next-highest (9.65s) close behind. | Borderline, not cleanly met under concurrency |
-| Follow-ups < 5s | Smoke: 1 of 3 under 5s (3.97s; 5.17s and 6.22s exceeded). 10-user: 6 of 10 under 5s; 4 exceeded (5.18s, 5.22s, 5.96s, 6.97s). | Not consistently met, worse under concurrency |
-| p95 < 15s | 9.80s (smoke), 10.63s (10-user) — met in both. | Met (locally) |
+| First token < 3s | **Not measurable by this harness.** The relay's `/chat` call is buffered JSON end-to-end (`copilot-panel.js` does a single `fetch().then(response.json())`, never SSE); there is no first-token event to observe from outside. Structural gap, not an omission. | N/A |
+| Complete snapshot < 10s | **Missed.** p50 alone is 13.81s — every snapshot turn exceeded the target. | **No** |
+| Follow-ups < 5s | **Missed, badly.** No deployed follow-up came in under 5s. | **No** |
+| p95 < 15s | **Missed.** 17.55s at 10 users; 18.41s at 50. | **No** |
+
+The deployed system misses **every** latency target it can be measured
+against — by roughly 1.4–3.5×. The earlier, rosier numbers (p50 7.86s, p95
+9.90s) came from the empty-chart patient and are void (§2.3). Against a
+patient with real data, the full tool fan-out plus verification costs ~2× more.
 
 **Dominant cost:** unchanged from the previous pass's finding, now
 reinforced by a second, independent transport and a heavier resource trace
@@ -242,13 +301,17 @@ follow-up latencies were measurably worse than the direct-chat run's
 with each relay-driven follow-up paying both a fresh FHIR-context bootstrap
 *and* a real PHP session lookup, where the direct-chat path only pays the
 former. Labs' missing patient index (the other named suspect) remains
-unisolated from this data — pid=2 has no labs on file, so no lab query was
-exercised.
+unisolated from this data — the local demo patient has no labs on file, so no
+lab query was exercised.
 
-**These remain local-stack numbers.** They demonstrate the same mechanism
-on a second transport but still cannot stand in for the deployed
-p50/p95/p99 and error-rate numbers PRD.md:338-339 requires — section 2
-gives the exact, minimal step (real credentials) needed to close that gap.
+**Two distinct bottlenecks, now separated by the deployed run.** The local
+`docker_stats` trace isolates the *latency* mechanism (bootstrap tax: OpenEMR
+pins ~97% CPU while the agent idles below 5%). The deployed 50-user run
+exposed a second, harder ceiling the local runs never reached — the *availability*
+wall, where OpenEMR's audit-log writes exhaust the database volume and the
+instance stops serving entirely (§2). Latency degrades gracefully; availability
+does not. Any scale plan (ARCHITECTURE.md §10) has to answer both, and the
+audit-volume one is the one that takes the system down.
 
 ## 6. Public exposure
 
