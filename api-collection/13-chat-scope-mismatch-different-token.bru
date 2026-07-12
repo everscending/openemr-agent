@@ -1,0 +1,50 @@
+meta {
+  name: 13 - Chat - Scope Mismatch, Different Token (404, mandatory)
+  type: http
+  seq: 13
+}
+
+post {
+  url: {{agent_base_url}}/chat
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "message": "Give me the medication list.",
+    "patient_id": "{{patient_id}}",
+    "token": "{{mismatched_token}}",
+    "conversation_id": "{{conversation_id}}"
+  }
+}
+
+docs {
+  T031 criterion 5's mandated negative: a /chat call with a mismatched
+  scope token. `conversation_id` (from request 10) is bound to the SHA-256
+  of the ORIGINAL bearer; presenting any other token value — here a
+  deliberately-invalid placeholder, since T011 binds on the token's HASH
+  before any FHIR call is made, so this does not need to be a second real
+  OAuth grant — must be rejected the same way as request 12: 404, and the
+  identical body (T011's "byte-identical apart from correlation ID" rule).
+}
+
+tests {
+  test("status is 404, never 403 (no existence oracle)", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+
+  test("body matches the documented 'conversation not found' contract", function () {
+    expect(res.getBody()).to.eql({ detail: "conversation not found" });
+  });
+
+  test("body is byte-identical to the different-patient 404 (request 12)", function () {
+    var previous = bru.getVar("scope_mismatch_404_body");
+    expect(previous).to.be.a("string").and.not.empty;
+    expect(JSON.stringify(res.getBody())).to.equal(previous);
+  });
+
+  test("the mismatched token string does not leak into the response", function () {
+    expect(JSON.stringify(res.getBody())).to.not.include(bru.getEnvVar("mismatched_token"));
+  });
+}

@@ -1,0 +1,31 @@
+meta {
+  name: 01 - Health Check
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{agent_base_url}}/health
+  body: none
+  auth: none
+}
+
+docs {
+  T001 liveness probe. No external calls, no auth. Always 200 with
+  `{"status": "ok"}` — the one request in this collection with no
+  dependency on a bearer token.
+}
+
+tests {
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("body is exactly {status: ok}", function () {
+    expect(res.getBody()).to.eql({ status: "ok" });
+  });
+
+  test("carries an X-Correlation-ID header (T001 criterion 3)", function () {
+    expect(res.getHeader("x-correlation-id")).to.be.a("string").and.not.empty;
+  });
+}

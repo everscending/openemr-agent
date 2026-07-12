@@ -1,0 +1,43 @@
+meta {
+  name: 12 - Chat - Scope Mismatch, Different Patient (404)
+  type: http
+  seq: 12
+}
+
+post {
+  url: {{agent_base_url}}/chat
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "message": "Give me the medication list.",
+    "patient_id": "{{other_patient_id}}",
+    "token": "{{bearer_token}}",
+    "conversation_id": "{{conversation_id}}"
+  }
+}
+
+docs {
+  T011 criterion 3 / mandatory adversarial test: the conversation from
+  request 10 is bound to `patient_id`. Presenting the SAME
+  conversation_id with a DIFFERENT patient_id must be rejected — 404, not
+  403 (a 403 would confirm the conversation exists to a caller who does
+  not own it; see T011's design decision). This is one of the two ways a
+  scope mismatch happens (the other is a different token — request 13).
+}
+
+tests {
+  test("status is 404, never 403 (no existence oracle)", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+
+  test("body matches the documented 'conversation not found' contract", function () {
+    expect(res.getBody()).to.eql({ detail: "conversation not found" });
+  });
+}
+
+script:post-response {
+  bru.setVar("scope_mismatch_404_body", JSON.stringify(res.getBody()));
+}

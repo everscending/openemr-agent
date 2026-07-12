@@ -1,0 +1,38 @@
+meta {
+  name: 11 - Chat - Follow-up (Same Conversation)
+  type: http
+  seq: 11
+}
+
+post {
+  url: {{agent_base_url}}/chat
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "message": "What did I just ask you?",
+    "patient_id": "{{patient_id}}",
+    "token": "{{bearer_token}}",
+    "conversation_id": "{{conversation_id}}"
+  }
+}
+
+docs {
+  T011 criterion 2: a follow-up POST presenting the conversation_id
+  captured from request 10 reuses the same conversation (same patient,
+  same caller) and runs with prior turns included. Depends on request 10
+  having run first in this same `bru run` (it sets the `conversation_id`
+  runtime variable).
+}
+
+tests {
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("returns the SAME conversation_id, not a new one", function () {
+    expect(res.getBody().conversation_id).to.equal(bru.getVar("conversation_id"));
+  });
+}

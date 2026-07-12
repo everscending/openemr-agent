@@ -1,0 +1,52 @@
+meta {
+  name: 16 - Chat - Streaming (SSE)
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{agent_base_url}}/chat?stream=true
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "message": "Hello — can you introduce yourself?",
+    "patient_id": "{{patient_id}}",
+    "token": "{{bearer_token}}"
+  }
+}
+
+docs {
+  T011 criterion 6: `stream=true` returns the buffered SSE sequence —
+  a `meta` event immediately, then the verified `message` event, then a
+  terminal `verdict` event. Verification runs to completion before any
+  claim-bearing content is emitted (see app.py's module docstring); this
+  request only asserts the three frames are present and in the documented
+  media type, not their content (which is model-generated and
+  non-deterministic).
+}
+
+tests {
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("content-type is text/event-stream", function () {
+    expect(res.getHeader("content-type")).to.include("text/event-stream");
+  });
+
+  test("frame order: meta, then message, then verdict", function () {
+    var text = res.getBody();
+    if (typeof text !== "string") {
+      text = JSON.stringify(text);
+    }
+    var metaIdx = text.indexOf("event: meta");
+    var messageIdx = text.indexOf("event: message");
+    var verdictIdx = text.indexOf("event: verdict");
+    expect(metaIdx).to.be.at.least(0);
+    expect(messageIdx).to.be.above(metaIdx);
+    expect(verdictIdx).to.be.above(messageIdx);
+  });
+}

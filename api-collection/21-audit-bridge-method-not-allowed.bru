@@ -1,0 +1,28 @@
+meta {
+  name: 21 - Audit Bridge - Method Not Allowed (405)
+  type: http
+  seq: 21
+}
+
+get {
+  url: {{openemr_base_url}}{{audit_bridge_path}}
+  body: none
+  auth: none
+}
+
+docs {
+  T016 criterion for non-POST methods: a GET on the bridge is 405, and no
+  row is written to either `log` or `extended_log` (not directly
+  observable from this collection, but the endpoint contract guarantees a
+  405 short-circuits before any write).
+}
+
+tests {
+  test("status is 405", function () {
+    expect(res.getStatus()).to.equal(405);
+  });
+
+  test("body matches the documented method-not-allowed contract", function () {
+    expect(res.getBody()).to.eql({ error: "method_not_allowed" });
+  });
+}

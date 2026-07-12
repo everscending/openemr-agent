@@ -1,0 +1,39 @@
+meta {
+  name: 15 - Chat - Malformed Request (422)
+  type: http
+  seq: 15
+}
+
+post {
+  url: {{agent_base_url}}/chat
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "patient_id": "{{patient_id}}",
+    "token": "{{bearer_token}}"
+  }
+}
+
+docs {
+  T011 criterion 1: a malformed request (here, missing the required
+  `message` field) is rejected with 422 via Pydantic — never a 500. This
+  does not depend on any other request in the collection and needs no
+  real bearer token: validation happens before the token is used for
+  anything.
+}
+
+tests {
+  test("status is 422, never 500", function () {
+    expect(res.getStatus()).to.equal(422);
+  });
+
+  test("FastAPI validation error names the missing field", function () {
+    var body = res.getBody();
+    expect(body.detail).to.be.an("array");
+    var loc = JSON.stringify(body.detail);
+    expect(loc).to.include("message");
+  });
+}
