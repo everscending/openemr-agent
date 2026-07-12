@@ -39,6 +39,10 @@ DEFAULT_PRICE_TABLE: PriceTable = {
         input_rate_per_million=Decimal("15"),
         output_rate_per_million=Decimal("75"),
     ),
+    "claude-sonnet-5": ModelPricing(
+        input_rate_per_million=Decimal("3"),
+        output_rate_per_million=Decimal("15"),
+    ),
 }
 
 
