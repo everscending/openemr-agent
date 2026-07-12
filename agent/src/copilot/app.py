@@ -60,8 +60,14 @@ from copilot.telemetry.metrics import TelemetryMetrics
 
 _logger = logging.getLogger("copilot.observability")
 
-DEFAULT_CHAT_MODEL = "claude-opus-4-8"
+DEFAULT_CHAT_MODEL = "claude-sonnet-5"
 DEFAULT_CHAT_MAX_STEPS = 6
+
+#: The default chat model is env-configurable (T043, cost — Opus is ~2x
+#: Sonnet 5 per-token); resolved at call time via ``default_chat_model()``,
+#: mirroring ``readiness.py``'s ``default_deadline()`` shape — never baked
+#: into a module-level constant via ``os.environ.get()`` at import time.
+CHAT_MODEL_ENV = "CHAT_MODEL"
 
 #: Rendered as the reply text when the LLM is down. Generic and PHI-free — never
 #: an exception message or stack trace (T012, ARCHITECTURE.md §7).
@@ -97,6 +103,16 @@ def _conversation_not_found() -> HTTPException:
 def _noop_sequence_recorder(event: str) -> None:
     """Default no-op audit ordering hook — tests inject a real recorder."""
     return None
+
+
+def default_chat_model() -> str:
+    """The chat model to use when no explicit ``chat_model`` is supplied.
+
+    Env-configurable (default ``claude-sonnet-5``, override via
+    ``CHAT_MODEL``), resolved fresh on every call — never cached at import
+    time.
+    """
+    return os.environ.get(CHAT_MODEL_ENV, DEFAULT_CHAT_MODEL)
 
 
 def _default_audit_bridge(metrics: AuditMetricsRecorder) -> AuditBridgeClient | None:
@@ -200,13 +216,18 @@ def _default_clock() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _default_chat_llm() -> LLMClient:
+def _default_chat_llm(model: str) -> LLMClient:
     # Imported lazily: constructing the SDK client opens no connection, but
     # keeping ``anthropic`` out of this module's top-level import list mirrors
     # the import-purity discipline the loop enforces for itself (T010).
+    #
+    # ``model`` is the caller's already-resolved chat model (T043) — this
+    # function must never independently re-resolve or hardcode a model string,
+    # or the LLM actually called could silently desynchronize from the model
+    # name recorded for telemetry/cost lookups (AgentLoop's ``model=`` below).
     from copilot.llm.anthropic_client import AnthropicLLMClient
 
-    return AnthropicLLMClient(model=DEFAULT_CHAT_MODEL)
+    return AnthropicLLMClient(model=model)
 
 
 def _default_chat_registry_factory() -> Callable[[str], ToolRegistry]:
@@ -329,7 +350,7 @@ def create_app(
     *,
     chat_llm: LLMClient | None = None,
     chat_registry_factory: Callable[[str], ToolRegistry] | None = None,
-    chat_model: str = DEFAULT_CHAT_MODEL,
+    chat_model: str | None = None,
     chat_max_steps: int = DEFAULT_CHAT_MAX_STEPS,
     chat_llm_timeout: float = DEFAULT_LLM_TIMEOUT_SECONDS,
     conversation_store: ConversationStore | None = None,
@@ -352,7 +373,12 @@ def create_app(
     production defaults are used (a single Anthropic client shared across
     requests, and a per-request tool registry built from the caller's own
     bearer token — §4's OAuth-per-request boundary). Tests inject a scripted
-    fake for both, so the suite makes no network call. ``conversation_store``
+    fake for both, so the suite makes no network call. ``chat_model`` omitted
+    resolves via ``default_chat_model()`` (default ``claude-sonnet-5``,
+    env-overridable via ``CHAT_MODEL`` — T043); the one resolved value is
+    threaded to both the default LLM client construction and the
+    ``AgentLoop`` model, so telemetry/cost lookups never disagree with the
+    model actually called. ``conversation_store``
     is the Redis-shaped state backend; omitted, an in-process store is built
     from ``conversation_ttl_seconds`` (default 2h, ARCHITECTURE.md §7) and
     ``clock`` (an injected clock, for deterministic TTL tests). ``audit_bridge``
@@ -376,7 +402,12 @@ def create_app(
     )
     deadline = readiness_deadline if readiness_deadline is not None else default_deadline()
 
-    resolved_llm: LLMClient = chat_llm if chat_llm is not None else _default_chat_llm()
+    resolved_chat_model: str = (
+        chat_model if chat_model is not None else default_chat_model()
+    )
+    resolved_llm: LLMClient = (
+        chat_llm if chat_llm is not None else _default_chat_llm(resolved_chat_model)
+    )
     resolved_registry_factory: Callable[[str], ToolRegistry] = (
         chat_registry_factory
         if chat_registry_factory is not None
@@ -479,7 +510,7 @@ def create_app(
             llm=resolved_llm,
             registry=registry,
             patient_id=record.patient_id,
-            model=chat_model,
+            model=resolved_chat_model,
             correlation_id=correlation_id,
             max_steps=chat_max_steps,
             llm_timeout=chat_llm_timeout,
