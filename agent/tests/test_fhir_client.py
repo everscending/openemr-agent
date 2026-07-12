@@ -11,12 +11,14 @@ Criteria map:
 from __future__ import annotations
 
 import asyncio
+import contextlib
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
 import pytest
 
-from copilot import fhir
+from copilot import correlation, fhir
 
 BASE_URL = "https://emr.example.test/apis/default/fhir"
 
@@ -355,3 +357,88 @@ async def test_empty_bundle_returns_no_entries_and_not_truncated() -> None:
 
     assert result.entries == []
     assert result.truncated is False
+
+
+# ---------------------------------------------------------------------------
+# T046 criterion 3: outbound FHIR requests forward the active correlation ID
+# ---------------------------------------------------------------------------
+
+
+@contextlib.contextmanager
+def active_correlation_id(value: str) -> Iterator[None]:
+    """Set the request-scoped correlation ID contextvar for the duration of
+    the ``with`` block, mirroring what ``CorrelationIdMiddleware`` does for a
+    real in-flight request (T001) -- without needing a full ASGI app just to
+    unit-test the FHIR client's forwarding behavior."""
+    token = correlation._correlation_id.set(value)
+    try:
+        yield
+    finally:
+        correlation._correlation_id.reset(token)
+
+
+async def test_read_forwards_the_active_correlation_id_header() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return json_response(patient("abc-123"))
+
+    with active_correlation_id("corr-fhir-999"):
+        client = make_client(handler, token="user-token-1")
+        await client.read("Patient", "abc-123")
+
+    assert len(seen) == 1
+    assert seen[0].headers[correlation.CORRELATION_ID_HEADER.lower()] == "corr-fhir-999"
+
+
+async def test_search_pagination_forwards_the_same_correlation_id_on_every_page() -> None:
+    seen: list[httpx.Request] = []
+
+    with active_correlation_id("corr-fhir-paging-777"):
+        client = make_client(three_page_handler(seen))
+        await client.search("Patient")
+
+    assert len(seen) == 3
+    assert all(
+        r.headers[correlation.CORRELATION_ID_HEADER.lower()] == "corr-fhir-paging-777"
+        for r in seen
+    )
+
+
+async def test_different_calls_forward_different_active_correlation_ids() -> None:
+    """Adversarial: proves the header tracks the *active* contextvar per call
+    rather than a value cached at client construction time."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return json_response(patient("abc-123"))
+
+    client = make_client(handler, token="user-token-1")
+
+    with active_correlation_id("corr-fhir-first"):
+        await client.read("Patient", "abc-123")
+    with active_correlation_id("corr-fhir-second"):
+        await client.read("Patient", "abc-123")
+
+    assert len(seen) == 2
+    assert seen[0].headers[correlation.CORRELATION_ID_HEADER.lower()] == "corr-fhir-first"
+    assert seen[1].headers[correlation.CORRELATION_ID_HEADER.lower()] == "corr-fhir-second"
+
+
+async def test_no_correlation_id_header_sent_when_none_is_active() -> None:
+    """Adversarial: outside any request context (the active contextvar is
+    unset), the client must not invent a header out of nothing."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return json_response(patient("abc-123"))
+
+    assert correlation.get_correlation_id() is None  # sanity: nothing leaked from another test
+    client = make_client(handler, token="user-token-1")
+    await client.read("Patient", "abc-123")
+
+    assert len(seen) == 1
+    assert correlation.CORRELATION_ID_HEADER.lower() not in seen[0].headers
