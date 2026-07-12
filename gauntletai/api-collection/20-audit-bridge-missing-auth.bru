@@ -1,0 +1,43 @@
+meta {
+  name: 20 - Audit Bridge - Missing Auth (401, mandatory)
+  type: http
+  seq: 20
+}
+
+post {
+  url: {{openemr_base_url}}{{audit_bridge_path}}
+  body: json
+  auth: none
+}
+
+body:json {
+  {}
+}
+
+docs {
+  T016 criterion 2 / T031 criterion 5's mandated negative: a POST with no
+  `Authorization` header must be rejected 401 — and the body must NOT be
+  the OpenEMR HTML login page. This is the `$ignoreAuth` trap the T016
+  ticket calls out directly: a page that forgets `$ignoreAuth = true`
+  answers unauthenticated requests with an HTML login page and HTTP 200,
+  which a status-only check would miss entirely. Asserted here on both the
+  status AND the body shape/content-type, not status alone.
+}
+
+tests {
+  test("status is 401", function () {
+    expect(res.getStatus()).to.equal(401);
+  });
+
+  test("body matches the documented byte-identical unauthorized contract", function () {
+    expect(res.getBody()).to.eql({ error: "unauthorized" });
+  });
+
+  test("body is NOT the OpenEMR HTML login page (the $ignoreAuth trap)", function () {
+    var contentType = res.getHeader("content-type") || "";
+    expect(contentType).to.not.include("text/html");
+    var raw = JSON.stringify(res.getBody());
+    expect(raw.toLowerCase()).to.not.include("<html");
+    expect(raw.toLowerCase()).to.not.include("login");
+  });
+}

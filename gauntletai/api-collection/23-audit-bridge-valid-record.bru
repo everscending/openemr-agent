@@ -1,0 +1,61 @@
+meta {
+  name: 23 - Audit Bridge - Valid Invocation Record (201)
+  type: http
+  seq: 23
+}
+
+script:pre-request {
+  bru.setVar("audit_occurred_at", new Date().toISOString());
+  bru.setVar("audit_correlation_id", "bruno-collection-valid-" + Date.now());
+  bru.setVar("audit_conversation_id", "bruno-collection-conv-" + Date.now());
+}
+
+post {
+  url: {{openemr_base_url}}{{audit_bridge_path}}
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{bearer_token}}
+}
+
+body:json {
+  {
+    "user_token_hash": "{{bearer_token_sha256}}",
+    "patient_id": "{{patient_id}}",
+    "correlation_id": "{{audit_correlation_id}}",
+    "conversation_id": "{{audit_conversation_id}}",
+    "occurred_at": "{{audit_occurred_at}}",
+    "claims_total": 2,
+    "claims_passed": 2,
+    "claims_stripped": 0,
+    "outcome": "answered",
+    "degraded": null,
+    "fallback_reason": null
+  }
+}
+
+docs {
+  T016 criteria 2-4: a valid, fully-authenticated invocation record
+  (matching T013's wire contract exactly — all 11 keys present) is
+  accepted 201 and produces one `log` row (event=ai-clinical-summary) and
+  one `extended_log` disclosure row, both keyed by `correlation_id`. This
+  collection only asserts the HTTP contract (the DB write is covered by
+  T016's own DB-backed test suite); running this request against a real
+  stack does leave a real audit row behind, which is the point — it's a
+  live demonstration of the durable audit trail the architecture leans on,
+  not a mock. Requires a REAL bearer in `bearer_token`/`bearer_token_sha256`
+  (see README "What to fill in first") — with the placeholder still in
+  place this comes back 401 instead of 201.
+}
+
+tests {
+  test("status is 201", function () {
+    expect(res.getStatus()).to.equal(201);
+  });
+
+  test("body matches the documented success contract", function () {
+    expect(res.getBody()).to.eql({ status: "recorded" });
+  });
+}

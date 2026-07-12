@@ -1,0 +1,39 @@
+meta {
+  name: 14 - Chat - Unknown Conversation Id (404)
+  type: http
+  seq: 14
+}
+
+post {
+  url: {{agent_base_url}}/chat
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "message": "Give me the medication list.",
+    "patient_id": "{{patient_id}}",
+    "token": "{{bearer_token}}",
+    "conversation_id": "00000000-0000-0000-0000-000000000000"
+  }
+}
+
+docs {
+  T011 mandatory adversarial test, third leg of the identical-body rule:
+  a conversation_id that was never created must 404 with the SAME body as
+  the two scope-mismatch cases (requests 12/13) — an unknown id must be
+  indistinguishable from "exists but isn't yours".
+}
+
+tests {
+  test("status is 404", function () {
+    expect(res.getStatus()).to.equal(404);
+  });
+
+  test("body is byte-identical to the scope-mismatch 404s", function () {
+    var previous = bru.getVar("scope_mismatch_404_body");
+    expect(previous).to.be.a("string").and.not.empty;
+    expect(JSON.stringify(res.getBody())).to.equal(previous);
+  });
+}

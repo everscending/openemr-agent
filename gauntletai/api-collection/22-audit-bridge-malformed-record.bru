@@ -1,0 +1,57 @@
+meta {
+  name: 22 - Audit Bridge - Malformed Record (422)
+  type: http
+  seq: 22
+}
+
+script:pre-request {
+  bru.setVar("audit_occurred_at", new Date().toISOString());
+  bru.setVar("audit_correlation_id", "bruno-collection-malformed-" + Date.now());
+  bru.setVar("audit_conversation_id", "bruno-collection-conv-" + Date.now());
+}
+
+post {
+  url: {{openemr_base_url}}{{audit_bridge_path}}
+  body: json
+  auth: none
+}
+
+headers {
+  Authorization: Bearer {{bearer_token}}
+}
+
+body:json {
+  {
+    "user_token_hash": "{{bearer_token_sha256}}",
+    "patient_id": "{{patient_id}}",
+    "correlation_id": "{{audit_correlation_id}}",
+    "conversation_id": "{{audit_conversation_id}}",
+    "occurred_at": "{{audit_occurred_at}}",
+    "claims_total": -1,
+    "claims_passed": 0,
+    "claims_stripped": 0,
+    "outcome": "answered",
+    "degraded": null,
+    "fallback_reason": null
+  }
+}
+
+docs {
+  T016 criterion 5: a structurally-parseable but invalid record (here,
+  `claims_total: -1`) is rejected 422 with the byte-identical
+  `{"error":"unprocessable"}` body, distinct from — and never confusable
+  with — the 401 auth-failure body (request 20). Requires a REAL bearer in
+  `bearer_token`/`bearer_token_sha256` to reach body validation at all: with
+  the placeholder still in place, auth fails first and this comes back 401
+  instead — see README "What to fill in first".
+}
+
+tests {
+  test("status is 422", function () {
+    expect(res.getStatus()).to.equal(422);
+  });
+
+  test("body matches the documented byte-identical unprocessable contract", function () {
+    expect(res.getBody()).to.eql({ error: "unprocessable" });
+  });
+}

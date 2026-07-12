@@ -1,0 +1,47 @@
+meta {
+  name: 02 - Readiness Check
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{agent_base_url}}/ready
+  body: none
+  auth: none
+}
+
+docs {
+  T004 readiness probe: concurrently checks openemr_fhir, llm_provider, and
+  trace_backend. Status is 200 when all three are reachable, 503 when any
+  one is not — both are "expected status classes" for this request; which
+  one you get on a given run depends on whether this environment's
+  dependencies (FHIR base URL, LLM provider key, trace exporter) are
+  configured, not on collection wiring. The structural shape (three keys,
+  the generic `trace_backend` key per T004 criterion 5) is asserted either
+  way.
+}
+
+tests {
+  test("status is 200 (all deps reachable) or 503 (one or more unreachable)", function () {
+    expect([200, 503]).to.include(res.getStatus());
+  });
+
+  test("body lists all three dependencies by key", function () {
+    var body = res.getBody();
+    expect(body).to.have.property("openemr_fhir");
+    expect(body).to.have.property("llm_provider");
+    expect(body).to.have.property("trace_backend");
+  });
+
+  test("trace backend key is the generic 'trace_backend', not a vendor name", function () {
+    var body = res.getBody();
+    expect(Object.keys(body)).to.include("trace_backend");
+  });
+
+  test("each dependency entry carries a status field", function () {
+    var body = res.getBody();
+    ["openemr_fhir", "llm_provider", "trace_backend"].forEach(function (key) {
+      expect(body[key]).to.have.property("status");
+    });
+  });
+}

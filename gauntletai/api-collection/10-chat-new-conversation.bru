@@ -1,0 +1,65 @@
+meta {
+  name: 10 - Chat - New Conversation (JSON)
+  type: http
+  seq: 10
+}
+
+post {
+  url: {{agent_base_url}}/chat
+  body: json
+  auth: none
+}
+
+headers {
+  X-Correlation-ID: bruno-collection-new-conversation
+}
+
+body:json {
+  {
+    "message": "Hello — can you introduce yourself?",
+    "patient_id": "{{patient_id}}",
+    "token": "{{bearer_token}}"
+  }
+}
+
+docs {
+  T011 criterion 1/2: a POST with no `conversation_id` starts a new
+  conversation and returns one. Requires a real bearer in `bearer_token`
+  (see README "What to fill in first") — a placeholder value still gets a
+  structurally valid 200 here (token *validation* only happens when a tool
+  call needs FHIR), but downstream requests in this collection that chain
+  off `conversation_id` need this request to have actually run.
+}
+
+tests {
+  test("status is 200", function () {
+    expect(res.getStatus()).to.equal(200);
+  });
+
+  test("response carries conversation_id and correlation_id", function () {
+    var body = res.getBody();
+    expect(body.conversation_id).to.be.a("string").and.not.empty;
+    expect(body.correlation_id).to.be.a("string").and.not.empty;
+  });
+
+  test("X-Correlation-ID request header is echoed back (T001/T011)", function () {
+    expect(res.getHeader("x-correlation-id")).to.equal("bruno-collection-new-conversation");
+    expect(res.getBody().correlation_id).to.equal("bruno-collection-new-conversation");
+  });
+
+  test("bearer token string does not leak into the response body", function () {
+    var raw = JSON.stringify(res.getBody());
+    var token = bru.getEnvVar("bearer_token");
+    if (token && token.indexOf("REPLACE_WITH") === -1) {
+      expect(raw).to.not.include(token);
+    }
+  });
+
+  test("verification counts object is present", function () {
+    expect(res.getBody().verification).to.have.property("claims_total");
+  });
+}
+
+script:post-response {
+  bru.setVar("conversation_id", res.getBody().conversation_id);
+}
