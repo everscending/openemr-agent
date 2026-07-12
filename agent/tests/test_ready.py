@@ -503,6 +503,7 @@ def test_readiness_module_does_not_import_fhir_client() -> None:
 
 def test_no_openemr_fhir_references_remain_in_agent_or_docs() -> None:
     repo_root = Path(__file__).resolve().parents[2]
+    self_path = Path(__file__).resolve()
     hits: list[str] = []
     for relative_base in ("agent", "docs"):
         base_path = repo_root / relative_base
@@ -511,9 +512,13 @@ def test_no_openemr_fhir_references_remain_in_agent_or_docs() -> None:
         for path in base_path.rglob("*"):
             if not path.is_file():
                 continue
+            if path.resolve() == self_path:
+                continue
             if ".tdd-swarm" in path.parts:
                 continue
             if "__pycache__" in path.parts or ".git" in path.parts:
+                continue
+            if ".pytest_cache" in path.parts:
                 continue
             try:
                 text = path.read_text(encoding="utf-8")
