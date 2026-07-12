@@ -6,6 +6,11 @@
  * The T011 /chat contract as a typed value object: the fields the relay forwards
  * server-side to the agent. `token` is the service bearer; it is carried here only
  * to hand to the agent transport and must never be echoed to the browser or logs.
+ * `correlationId` (T046) is minted by the relay controller once per inbound request
+ * and threaded through so the same ID appears in both the outbound agent call and
+ * the relay's own failure logs — joinable from logs alone. When `null` (e.g. a
+ * caller constructing this value object directly), the HTTP transport mints its
+ * own fallback rather than send an absent header.
  *
  * @package   OpenEMR
  * @link      https://www.open-emr.org
@@ -25,6 +30,7 @@ final readonly class CopilotChatRequest
         public string $patientId,
         public string $token,
         public ?string $conversationId = null,
+        public ?string $correlationId = null,
     ) {
     }
 }

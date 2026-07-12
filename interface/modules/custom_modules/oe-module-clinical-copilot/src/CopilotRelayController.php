@@ -19,6 +19,12 @@
  *     graceful failure state; the exception message/class never reaches the
  *     browser or a log — the class name only.
  *
+ * T046: a fresh UUIDv4 correlation ID is minted once per inbound request,
+ * forwarded to the agent as part of the outbound CopilotChatRequest (which the
+ * HTTP transport sends as `X-Correlation-ID`), and included in the failure log
+ * so the log entry and the agent-side record for this same call are joinable
+ * from logs alone (PRD.md:308-310, ARCHITECTURE.md:65-67,99).
+ *
  * @package   OpenEMR
  * @link      https://www.open-emr.org
  * @author    Clinical Co-Pilot TDD run
@@ -32,6 +38,7 @@ namespace OpenEMR\Modules\ClinicalCopilot;
 
 use OpenEMR\Common\Csrf\CsrfUtils;
 use Psr\Log\LoggerInterface;
+use Ramsey\Uuid\Uuid;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -49,6 +56,11 @@ final class CopilotRelayController
 
     public function handle(Request $request, SessionInterface $session): Response
     {
+        // T046: one correlation ID per inbound request, minted before anything
+        // else so it is available for the failure log regardless of where the
+        // request is rejected or fails.
+        $correlationId = Uuid::uuid4()->toString();
+
         if ($request->getMethod() !== 'POST') {
             return $this->json(['error' => 'method_not_allowed'], Response::HTTP_METHOD_NOT_ALLOWED);
         }
@@ -78,13 +90,14 @@ final class CopilotRelayController
         try {
             $token = $this->tokenProvider->getToken($patientId);
             $answer = $this->agent->chat(
-                new CopilotChatRequest($message, $patientId, $token, $conversationId)
+                new CopilotChatRequest($message, $patientId, $token, $conversationId, $correlationId)
             );
         } catch (AgentUnavailableException $e) {
             // The guard must never become the leak: class name only, never the
             // message (it may carry URLs, statuses, or the token).
             $this->logger->error('clinical_copilot_relay_agent_unavailable', [
                 'exception_class' => $e::class,
+                'correlation_id' => $correlationId,
             ]);
             return $this->json(['error' => 'agent_unavailable'], Response::HTTP_BAD_GATEWAY);
         }

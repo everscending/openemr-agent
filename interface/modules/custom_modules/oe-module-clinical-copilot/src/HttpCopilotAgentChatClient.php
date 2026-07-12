@@ -8,6 +8,12 @@
  * Every transport error, non-2xx status, or unparseable body surfaces as a single
  * AgentUnavailableException whose message carries no browser-bound detail.
  *
+ * T046: every call carries an `X-Correlation-ID` header so the agent joins its
+ * logs/spans/audit record to this same request. Uses `$request->correlationId`
+ * when the caller supplied one (the normal path — CopilotRelayController mints
+ * it); mints its own UUIDv4 fallback only when constructed/called directly
+ * without one, so the header is never absent.
+ *
  * @package   OpenEMR
  * @link      https://www.open-emr.org
  * @author    Clinical Co-Pilot TDD run
@@ -19,8 +25,12 @@ declare(strict_types=1);
 
 namespace OpenEMR\Modules\ClinicalCopilot;
 
+use Ramsey\Uuid\Uuid;
+
 final class HttpCopilotAgentChatClient implements CopilotAgentChatClient
 {
+    private const CORRELATION_ID_HEADER = 'X-Correlation-ID';
+
     public function __construct(
         private readonly string $baseUrl,
         private readonly int $timeoutSeconds = 8,
@@ -43,6 +53,8 @@ final class HttpCopilotAgentChatClient implements CopilotAgentChatClient
             throw new AgentUnavailableException('failed to encode agent request');
         }
 
+        $correlationId = $request->correlationId ?? Uuid::uuid4()->toString();
+
         $handle = curl_init(rtrim($this->baseUrl, '/') . '/chat');
         if ($handle === false) {
             throw new AgentUnavailableException('failed to initialize agent transport');
@@ -51,7 +63,11 @@ final class HttpCopilotAgentChatClient implements CopilotAgentChatClient
         curl_setopt_array($handle, [
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => $body,
-            CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json'],
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'Accept: application/json',
+                self::CORRELATION_ID_HEADER . ': ' . $correlationId,
+            ],
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_CONNECTTIMEOUT => $this->timeoutSeconds,
             CURLOPT_TIMEOUT => $this->timeoutSeconds,

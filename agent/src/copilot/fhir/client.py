@@ -5,6 +5,14 @@ requesting user's SMART token so OpenEMR's ACL and scopes enforce access
 (ARCHITECTURE.md section 4, trust boundary 2). The client exposes only
 GET-based ``read`` and ``search`` operations and raises the typed error
 taxonomy in :mod:`copilot.fhir.errors` on every failure.
+
+T046: every outbound request also forwards the request's active correlation
+ID (the same one the PHP relay minted and the ``/chat`` route bound to this
+call via :mod:`copilot.correlation`) as ``X-Correlation-ID``, so a FHIR-side
+access log line is joinable back to the originating request. Read per-call
+(not cached at construction) so it always reflects whichever request is
+actually in flight; omitted entirely outside any request context rather than
+inventing a value.
 """
 
 from __future__ import annotations
@@ -17,6 +25,7 @@ SearchParams = Mapping[str, "str | Sequence[str]"]
 
 import httpx
 
+from copilot.correlation import CORRELATION_ID_HEADER, get_correlation_id
 from copilot.fhir.errors import (
     FhirAuthError,
     FhirMalformedResponse,
@@ -148,9 +157,11 @@ class FhirClient:
         resource_type: str,
         params: SearchParams | None = None,
     ) -> Any:
+        correlation_id = get_correlation_id()
+        headers = {CORRELATION_ID_HEADER: correlation_id} if correlation_id else None
         try:
             async with asyncio.timeout(self._timeout):
-                response = await self._client.get(url, params=params)
+                response = await self._client.get(url, params=params, headers=headers)
         except (TimeoutError, httpx.TimeoutException) as exc:
             raise FhirTimeout(
                 f"FHIR request for {resource_type} timed out "
