@@ -1,15 +1,19 @@
-"""The one module permitted to import the OpenTelemetry SDK/exporters (T014).
+"""The one module permitted to import the OpenTelemetry SDK/exporters
+(T014, exporter/service-name env wiring completed by T028).
 
 ARCHITECTURE.md:422 — agent code never imports a vendor tracing SDK; only
 this bootstrap module does, wired lazily (never at another module's top
 level — see ``copilot.telemetry.import_guard``'s "Scope" note) from
 ``copilot.app.create_app``. Everywhere else, only the vendor-neutral
 ``opentelemetry.trace`` API is used (:mod:`copilot.telemetry.tracing`). The
-exporter destination is environment configuration, never code
-(ARCHITECTURE.md §7's portability rule (a)/(c)) — LangSmith or any other
-backend is an OTel exporter destination, configured via
-``OTEL_EXPORTER_OTLP_ENDPOINT``, not coded against. Account wiring, dashboards,
-and alert definitions are out of scope here (T014 "Out of scope").
+exporter destination — endpoint, headers, and resource ``service.name`` — is
+entirely environment configuration, never code (ARCHITECTURE.md §7's
+portability rule (a)/(c); T028 criterion 1) — LangSmith or any other backend
+is an OTel exporter destination, configured via
+``OTEL_EXPORTER_OTLP_ENDPOINT`` (+ ``OTEL_EXPORTER_OTLP_HEADERS``, read by
+``OTLPSpanExporter`` itself) and ``OTEL_SERVICE_NAME``, not coded against.
+Account wiring, dashboards, and alert definitions live under
+``docs/observability/`` (T028), never here.
 
 Tests never exercise this module's exporter path — they build their own
 ``TracerProvider`` + ``InMemorySpanExporter`` and inject the resulting
@@ -35,7 +39,16 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter
 #: §7): tracing is opt-in via deploy-time config, never a startup failure.
 OTEL_EXPORTER_OTLP_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_ENDPOINT"
 
-_SERVICE_NAME = "copilot"
+#: Standard OTel environment variable for the resource's ``service.name``
+#: (T028 criterion 1: endpoint, headers, *and* service name are all
+#: env-only — none hardcoded past a sane default). Headers need no constant
+#: here: ``OTLPSpanExporter`` reads ``OTEL_EXPORTER_OTLP_HEADERS`` /
+#: ``OTEL_EXPORTER_OTLP_TRACES_HEADERS`` itself whenever this module leaves
+#: ``headers=`` unset, so there is nothing for this module to read or thread
+#: through.
+OTEL_SERVICE_NAME_ENV = "OTEL_SERVICE_NAME"
+
+_DEFAULT_SERVICE_NAME = "copilot"
 
 _logger = logging.getLogger(__name__)
 _configured = False
@@ -75,11 +88,15 @@ def configure_tracing(*, exporter: SpanExporter | None = None) -> trace.Tracer:
         resolved_exporter = (
             exporter if exporter is not None else _otlp_exporter_from_env()
         )
+        service_name = os.environ.get(OTEL_SERVICE_NAME_ENV, _DEFAULT_SERVICE_NAME)
         provider = TracerProvider(
-            resource=Resource.create({"service.name": _SERVICE_NAME})
+            resource=Resource.create({"service.name": service_name})
         )
         if resolved_exporter is not None:
             provider.add_span_processor(SimpleSpanProcessor(resolved_exporter))
         trace.set_tracer_provider(provider)
         _configured = True
-    return trace.get_tracer(_SERVICE_NAME)
+    # The tracer *instrumentation-scope* name is distinct from the resource's
+    # ``service.name`` above (which is env-configurable) — this one matches
+    # :mod:`copilot.telemetry.tracing`'s ``_TRACER_NAME`` and stays fixed.
+    return trace.get_tracer(_DEFAULT_SERVICE_NAME)
