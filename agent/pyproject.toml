@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 evals = "copilot.evals.__main__:main"
+loadtest = "copilot.loadtest.cli:main"
 
 [dependency-groups]
 dev = [
