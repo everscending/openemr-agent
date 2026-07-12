@@ -1,0 +1,37 @@
+
+Metrics for openemr in production (last 1h)
+
+  Resource Usage
+  ─────────────────────────────────────────────────────────────────────
+             current            avg             max             limit
+  CPU       0 vCPU (0%)        < 0.01 vCPU     0.02 vCPU       8.0 vCPU
+  Memory    192 MB (2%)        188 MB          192 MB          8.00 GB
+
+  Public Network Traffic
+  ──────────────────────────────────────────────
+  Egress       0.00 MB                 avg: 0.00 MB          max: 0.04 MB
+  Ingress      0 MB                    avg: 0.00 MB          max: 0.01 MB
+
+  Volume: /var/www/localhost/htdocs/openemr/sites
+  ──────────────────────────────────────────────
+  Disk         34 MB (7%)              avg: 34 MB            max: 34 MB   (limit: 500 MB)
+
+  HTTP Requests (145 total)
+  ──────────────────────────────────────────────
+  Total        145
+  2xx          144 (99.3%)
+  3xx          1 (0.7%)
+  4xx          0 (0.0%)
+  5xx          0 (0.0%)
+  Error Rate   0.0%
+
+  Latency      p50: 105ms   p90: 105ms   p95: 105ms   p99: 105ms
+
+  Recent Deployments
+  ──────────────────────────────────────────────
+  2026-07-11 21:23 UTC   a4cef78d   SUCCESS
+  2026-07-11 21:03 UTC   ae1483fd   REMOVED
+  2026-07-10 23:52 UTC   b2557540   REMOVED
+  2026-07-10 05:38 UTC   be36e19f   REMOVED
+  2026-07-08 04:27 UTC   fcece3ce   REMOVED
+

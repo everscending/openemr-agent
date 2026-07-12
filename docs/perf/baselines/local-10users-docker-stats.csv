@@ -1,0 +1,23 @@
+timestamp_utc,container,cpu_pct,mem_usage,mem_pct,net_io
+2026-07-12T05:24:34Z,development-easy-copilot-1,0.22%,70.42MiB / 23.68GiB,0.29%,405kB / 464kB
+2026-07-12T05:24:34Z,development-easy-openemr-1,0.42%,863.3MiB / 23.68GiB,3.56%,451MB / 188MB
+2026-07-12T05:24:38Z,development-easy-copilot-1,0.24%,70.42MiB / 23.68GiB,0.29%,405kB / 464kB
+2026-07-12T05:24:38Z,development-easy-openemr-1,0.39%,863.3MiB / 23.68GiB,3.56%,451MB / 188MB
+2026-07-12T05:24:43Z,development-easy-copilot-1,0.23%,70.42MiB / 23.68GiB,0.29%,405kB / 464kB
+2026-07-12T05:24:43Z,development-easy-openemr-1,0.38%,863.3MiB / 23.68GiB,3.56%,451MB / 188MB
+2026-07-12T05:24:47Z,development-easy-copilot-1,1.84%,70.47MiB / 23.68GiB,0.29%,456kB / 531kB
+2026-07-12T05:24:47Z,development-easy-openemr-1,5.91%,867.8MiB / 23.68GiB,3.58%,452MB / 189MB
+2026-07-12T05:24:52Z,development-easy-copilot-1,2.95%,72.32MiB / 23.68GiB,0.30%,511kB / 608kB
+2026-07-12T05:24:52Z,development-easy-openemr-1,48.76%,904.6MiB / 23.68GiB,3.73%,455MB / 190MB
+2026-07-12T05:24:56Z,development-easy-copilot-1,1.44%,72.48MiB / 23.68GiB,0.30%,574kB / 695kB
+2026-07-12T05:24:56Z,development-easy-openemr-1,8.60%,891.9MiB / 23.68GiB,3.68%,457MB / 191MB
+2026-07-12T05:25:01Z,development-easy-copilot-1,3.11%,73.97MiB / 23.68GiB,0.31%,644kB / 798kB
+2026-07-12T05:25:01Z,development-easy-openemr-1,76.15%,882.9MiB / 23.68GiB,3.64%,460MB / 191MB
+2026-07-12T05:25:05Z,development-easy-copilot-1,4.66%,75.15MiB / 23.68GiB,0.31%,710kB / 918kB
+2026-07-12T05:25:05Z,development-easy-openemr-1,97.29%,897.9MiB / 23.68GiB,3.70%,463MB / 192MB
+2026-07-12T05:25:10Z,development-easy-copilot-1,2.15%,74.88MiB / 23.68GiB,0.31%,733kB / 975kB
+2026-07-12T05:25:10Z,development-easy-openemr-1,0.41%,888.9MiB / 23.68GiB,3.67%,463MB / 193MB
+2026-07-12T05:25:15Z,development-easy-copilot-1,1.23%,74.14MiB / 23.68GiB,0.31%,747kB / 1.01MB
+2026-07-12T05:25:15Z,development-easy-openemr-1,10.58%,886.9MiB / 23.68GiB,3.66%,464MB / 193MB
+2026-07-12T05:25:20Z,development-easy-copilot-1,0.26%,74.36MiB / 23.68GiB,0.31%,756kB / 1.03MB
+2026-07-12T05:25:20Z,development-easy-openemr-1,7.14%,886.7MiB / 23.68GiB,3.66%,464MB / 193MB

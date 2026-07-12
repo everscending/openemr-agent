@@ -1,0 +1,2 @@
+{"scenario": "UC-2-followup", "step": "initial-snapshot", "status_code": 200, "latency_ms": 9986.289024353027, "error": null, "timestamp": 1783836362.901047}
+{"scenario": "UC-2-followup", "step": "followup", "status_code": 200, "latency_ms": 5230.536222457886, "error": null, "timestamp": 1783836393.132721}

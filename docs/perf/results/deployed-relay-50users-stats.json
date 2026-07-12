@@ -1,0 +1,18 @@
+{
+  "run": "deployed-relay-50users",
+  "target": "deployed (https://openemr-production-472c.up.railway.app)",
+  "patient_pid": 21,
+  "transport": "openemr-public-relay",
+  "total_requests": 85,
+  "error_count": 38,
+  "error_rate": 0.4470588235294118,
+  "rate_limited_count": 0,
+  "p50_ms": 7697.39294052124,
+  "p95_ms": 18408.321142196655,
+  "p99_ms": 19188.348054885864,
+  "error_breakdown": {
+    "ok": 47,
+    "RelayAuthError": 15,
+    "http_500": 23
+  }
+}

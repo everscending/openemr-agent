@@ -1,0 +1,6 @@
+{"scenario": "UC-2-followup", "step": "initial-snapshot", "status_code": 200, "latency_ms": 8669.942140579224, "error": null, "timestamp": 1783835664.1483688}
+{"scenario": "UC-2-followup", "step": "initial-snapshot", "status_code": 200, "latency_ms": 10118.980169296265, "error": null, "timestamp": 1783835668.0784278}
+{"scenario": "UC-2-followup", "step": "initial-snapshot", "status_code": 200, "latency_ms": 8827.862024307251, "error": null, "timestamp": 1783835669.350132}
+{"scenario": "UC-2-followup", "step": "followup", "status_code": 200, "latency_ms": 5173.798084259033, "error": null, "timestamp": 1783835671.322879}
+{"scenario": "UC-2-followup", "step": "followup", "status_code": 200, "latency_ms": 3972.9340076446533, "error": null, "timestamp": 1783835675.324234}
+{"scenario": "UC-2-followup", "step": "followup", "status_code": 200, "latency_ms": 6220.473051071167, "error": null, "timestamp": 1783835676.300145}
