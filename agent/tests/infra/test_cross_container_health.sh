@@ -76,7 +76,7 @@ if [ "${ready_code}" != "200" ] && [ "${ready_code}" != "503" ]; then
     exit 1
 fi
 
-for key in openemr_fhir llm_provider trace_backend; do
+for key in openemr llm_provider trace_backend; do
     if ! printf '%s' "${ready_body}" | grep -q "\"${key}\""; then
         echo "FAIL: /ready body missing dependency key '${key}'" >&2
         exit 1

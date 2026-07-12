@@ -1,10 +1,19 @@
 """Readiness probing for the Co-Pilot service (T004).
 
 The ``/ready`` endpoint validates three meaningful dependencies —
-``openemr_fhir``, ``llm_provider``, and ``trace_backend`` — via injectable
+``openemr``, ``llm_provider``, and ``trace_backend`` — via injectable
 async checker functions. This module owns concurrency, the overall
 deadline, per-probe latency measurement, and response shaping; checkers
 only perform a lightweight reachability call (or raise on failure).
+
+T045: the ``openemr`` checker (this key was previously named after the
+FHIR dependency it originally probed) probes OpenEMR's site root with a
+plain, unauthenticated GET — not the FHIR ``/metadata`` endpoint.
+``/metadata`` sits behind the same auth gate as the rest of the FHIR API
+and 503s in production regardless of OpenEMR's actual health, per
+PRD.md:325-329 ("generic OpenEMR reachability, no FHIR mention"). The
+root URL is derived from ``OPENEMR_FHIR_BASE_URL`` (same host in every
+environment) — no new env var.
 
 Per ARCHITECTURE.md section 7 portability rule (b), the trace backend is
 reported under the generic ``trace_backend`` key — a configured
@@ -28,15 +37,14 @@ import asyncio
 import os
 import time
 from typing import Any, Awaitable, Callable, Mapping
+from urllib.parse import urlsplit
 
 import httpx
-
-from copilot.fhir.client import FhirClient
 
 Checker = Callable[[], Awaitable[None]]
 """Async callable that returns on success and raises on failure."""
 
-DEPENDENCY_KEYS: tuple[str, ...] = ("openemr_fhir", "llm_provider", "trace_backend")
+DEPENDENCY_KEYS: tuple[str, ...] = ("openemr", "llm_provider", "trace_backend")
 
 DEFAULT_DEADLINE_SECONDS = 5.0
 PROBE_HTTP_TIMEOUT_SECONDS = 4.0
@@ -114,7 +122,7 @@ def default_checkers(
     ``httpx`` connection is used, exactly like the other two dependencies.
     """
     return {
-        "openemr_fhir": make_openemr_fhir_checker(),
+        "openemr": make_openemr_checker(),
         "llm_provider": make_http_reachability_checker(
             LLM_PROVIDER_URL_ENV, dependency="llm_provider"
         ),
@@ -138,30 +146,62 @@ def default_deadline() -> float:
     return value if value > 0 else DEFAULT_DEADLINE_SECONDS
 
 
-def make_openemr_fhir_checker(fhir_client: FhirClient | None = None) -> Checker:
-    """Checker probing the OpenEMR FHIR endpoint via ``GET <base>/metadata``.
+def make_openemr_checker(
+    *, transport: httpx.AsyncBaseTransport | None = None
+) -> Checker:
+    """Checker probing OpenEMR's site root via a plain, unauthenticated GET.
 
-    An explicit :class:`FhirClient` may be injected; otherwise one is built
-    per probe from ``OPENEMR_FHIR_BASE_URL`` (the CapabilityStatement
-    endpoint requires no token, so an empty bearer token is used).
+    Deliberately *not* the FHIR API: ``<base>/metadata`` sits behind the
+    same auth gate as the rest of the FHIR surface, so it 503s whenever the
+    caller has no token — regardless of whether OpenEMR itself is actually
+    up (T045). This checker instead derives OpenEMR's site root from
+    ``OPENEMR_FHIR_BASE_URL`` (``scheme://netloc`` only, via
+    :func:`urllib.parse.urlsplit`) and issues a bare GET with no
+    ``Authorization`` header — mirroring
+    :func:`make_http_reachability_checker`'s ``>=500 = failure`` semantics,
+    but against a derived URL rather than an env var read verbatim.
+
+    ``transport`` is the same test-only injection seam the other
+    reachability checkers use (default ``None`` uses a real network
+    connection).
     """
 
     async def check() -> None:
-        if fhir_client is not None:
-            await fhir_client.capability_statement()
-            return
         base_url = os.environ.get(OPENEMR_FHIR_BASE_URL_ENV)
         if not base_url:
             raise RuntimeError(
-                f"openemr_fhir base URL is not configured "
+                f"openemr base URL is not configured "
                 f"(set {OPENEMR_FHIR_BASE_URL_ENV})"
             )
-        async with FhirClient(
-            base_url, token="", timeout=PROBE_HTTP_TIMEOUT_SECONDS
+        root_url = _derive_openemr_root(base_url)
+        if root_url is None:
+            raise RuntimeError(
+                f"openemr base URL is not a parseable URL "
+                f"(missing scheme or host in {OPENEMR_FHIR_BASE_URL_ENV})"
+            )
+        async with httpx.AsyncClient(
+            timeout=PROBE_HTTP_TIMEOUT_SECONDS, transport=transport
         ) as client:
-            await client.capability_statement()
+            response = await client.get(root_url)
+            if response.status_code >= 500:
+                raise RuntimeError(
+                    f"openemr responded with HTTP {response.status_code}"
+                )
 
     return check
+
+
+def _derive_openemr_root(base_url: str) -> str | None:
+    """Derive OpenEMR's site root (``scheme://netloc``) from a FHIR base URL.
+
+    Returns ``None`` when ``base_url`` is unparseable (empty ``scheme`` or
+    ``netloc``), so the caller can fail closed via the same ``RuntimeError``
+    path used for missing configuration, rather than crash.
+    """
+    parts = urlsplit(base_url)
+    if not parts.scheme or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}"
 
 
 def make_http_reachability_checker(
