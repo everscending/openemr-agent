@@ -14,9 +14,12 @@ from typing import Protocol
 
 
 class ToolFailureRecorder(Protocol):
-    """The agent loop's injection seam for counting tool execution failures."""
+    """The agent loop's injection seam for counting tool execution failures
+    and malformed-draft corrective retries (T039)."""
 
     def record_tool_failure(self) -> None: ...
+
+    def record_corrective_retry(self) -> None: ...
 
 
 class NullToolFailureRecorder:
@@ -25,9 +28,13 @@ class NullToolFailureRecorder:
     def record_tool_failure(self) -> None:
         return None
 
+    def record_corrective_retry(self) -> None:
+        return None
+
 
 class TelemetryMetrics:
-    """Thread-safe in-process counters: audit delivery outcomes + tool failures.
+    """Thread-safe in-process counters: audit delivery outcomes, tool
+    failures, and malformed-draft corrective retries.
 
     Implements both :class:`~copilot.audit.bridge.AuditMetricsRecorder` (so an
     instance can be handed directly to ``AuditBridgeClient``) and
@@ -40,6 +47,7 @@ class TelemetryMetrics:
         self._audit_success = 0
         self._audit_failure = 0
         self._tool_failure = 0
+        self._corrective_retry = 0
 
     def record_success(self) -> None:
         with self._lock:
@@ -53,6 +61,10 @@ class TelemetryMetrics:
         with self._lock:
             self._tool_failure += 1
 
+    def record_corrective_retry(self) -> None:
+        with self._lock:
+            self._corrective_retry += 1
+
     def snapshot(self) -> dict[str, int]:
         """Counters only — never request-scoped data (criterion 6)."""
         with self._lock:
@@ -60,4 +72,5 @@ class TelemetryMetrics:
                 "audit_delivery_success_total": self._audit_success,
                 "audit_delivery_failure_total": self._audit_failure,
                 "tool_failure_total": self._tool_failure,
+                "llm_corrective_retry_total": self._corrective_retry,
             }

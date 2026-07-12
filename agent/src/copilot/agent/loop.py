@@ -363,6 +363,10 @@ class AgentLoop:
                                 coverage,
                                 refs,
                             )
+                        # T039: count the corrective retry itself — never the
+                        # terminal fallback above, never tool-arg failures
+                        # (those bump tool_failure_total via _execute_tool).
+                        self._tool_metrics.record_corrective_retry()
                         messages.append(
                             LLMMessage(role="assistant", content="")
                         )
