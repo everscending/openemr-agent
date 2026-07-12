@@ -48,7 +48,7 @@ documented contract for those).
 
    ```bash
    openemr-cmd e "su -s /bin/sh apache -c 'php \
-     /var/www/localhost/htdocs/openemr/gauntletai/api-collection/bin/mint_bearer_token.php'"
+     /var/www/localhost/htdocs/openemr/api-collection/bin/mint_bearer_token.php'"
    ```
 
    Prints two lines:
@@ -66,7 +66,7 @@ documented contract for those).
    written back into the committed environment file):
 
    ```bash
-   cd gauntletai/api-collection
+   cd api-collection
    bru run --env local \
      --env-var bearer_token="$BEARER_TOKEN" \
      --env-var bearer_token_sha256="$BEARER_TOKEN_SHA256"
@@ -83,9 +83,9 @@ Against the local dev stack (`docker/development-easy`, already up per
 
 ```bash
 TOKENS=$(openemr-cmd e "su -s /bin/sh apache -c 'php \
-  /var/www/localhost/htdocs/openemr/gauntletai/api-collection/bin/mint_bearer_token.php'")
+  /var/www/localhost/htdocs/openemr/api-collection/bin/mint_bearer_token.php'")
 eval "$TOKENS"
-cd gauntletai/api-collection
+cd api-collection
 bru run --env local --env-var bearer_token="$BEARER_TOKEN" --env-var bearer_token_sha256="$BEARER_TOKEN_SHA256"
 ```
 
@@ -96,7 +96,7 @@ Expect `13 (13 Passed)`, `36/36` tests.
 directory — `bru run <path-to-collection>` from *outside* the collection
 fails with `You can run only at the root of a collection`, even though
 `bru --help`'s own examples suggest otherwise. `cd` into
-`gauntletai/api-collection` first, as above.
+`api-collection` first, as above.
 
 Without `bearer_token`/`bearer_token_sha256` filled in, everything **except**
 requests 22 and 23 still passes — those two fail 401 (auth required before
@@ -106,7 +106,7 @@ collection: no real credential ships in git.
 ### Against the deployed Railway stack
 
 ```bash
-cd gauntletai/api-collection
+cd api-collection
 bru run --env railway --env-var bearer_token=... --env-var bearer_token_sha256=... \
   --env-var patient_id=<a-deployed-patient-uuid> --env-var other_patient_id=<a-different-one>
 ```

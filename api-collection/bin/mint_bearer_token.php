@@ -17,7 +17,7 @@
  * Usage (run inside the openemr container as the apache user):
  *
  *   openemr-cmd e "su -s /bin/sh apache -c 'php \
- *     /var/www/localhost/htdocs/openemr/gauntletai/api-collection/bin/mint_bearer_token.php'"
+ *     /var/www/localhost/htdocs/openemr/api-collection/bin/mint_bearer_token.php'"
  *
  * Prints two lines, shell-sourceable:
  *   BEARER_TOKEN=<jwt>
@@ -39,7 +39,7 @@ $sessionAllowWrite = true;
 $_SERVER['HTTP_HOST'] ??= 'localhost';
 $_SERVER['SERVER_NAME'] ??= 'localhost';
 
-require_once __DIR__ . "/../../../interface/globals.php";
+require_once __DIR__ . "/../../interface/globals.php";
 
 use OpenEMR\Core\ModulesClassLoader;
 use OpenEMR\Core\OEGlobalsBag;
@@ -48,7 +48,7 @@ use OpenEMR\Modules\ClinicalCopilot\OAuthServiceTokenProvider;
 $classLoader = new ModulesClassLoader(OEGlobalsBag::getInstance()->getProjectDir());
 $classLoader->registerNamespaceIfNotExists(
     'OpenEMR\\Modules\\ClinicalCopilot\\',
-    __DIR__ . '/../../../interface/modules/custom_modules/oe-module-clinical-copilot/src'
+    __DIR__ . '/../../interface/modules/custom_modules/oe-module-clinical-copilot/src'
 );
 
 $oauthBaseUrl = getenv('COPILOT_OAUTH_BASE_URL') ?: 'https://localhost';
