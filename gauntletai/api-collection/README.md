@@ -111,17 +111,26 @@ bru run --env railway --env-var bearer_token=... --env-var bearer_token_sha256=.
   --env-var patient_id=<a-deployed-patient-uuid> --env-var other_patient_id=<a-different-one>
 ```
 
-**Known limitation:** the deployed `copilot-agent` service is private-network
-only (no public Railway domain — see the deployment notes), so
-`environments/railway.bru`'s `agent_base_url` points at
-`copilot-agent.railway.internal:8080`, which only resolves from *inside*
-Railway's network. Requests 01, 02, and 10-16 (everything against the agent
-service) are therefore only runnable from something on that private network
-(e.g. `railway ssh` into a Railway-hosted process), not from a grader's own
-machine. Requests 20-23 (audit-bridge) run against `openemr_base_url`, which
-**is** publicly reachable, so those four work unmodified from anywhere. This
-is disclosed rather than worked around — exposing the agent service publicly
-is a deployment decision outside this ticket's scope (see T022/T020).
+**Known limitation:** the deployed `copilot-agent` service has a public
+Railway domain (`environments/railway.bru`'s `agent_base_url`,
+`https://copilot-agent-production-df9d.up.railway.app`), but as of this
+writing it returns `502 Application failed to respond` on every route,
+including `/health` — a target-port/ingress misconfiguration on the Railway
+service (see `.tdd-swarm/progress.md`'s T030 log entries; this domain has
+flapped between not existing, 502ing, and being deleted over the course of
+this run). Requests 01, 02, and 10-16 (everything against the agent
+service) will therefore fail against Railway until that's fixed on the
+Railway side — this collection cannot repair a deploy-time ingress config
+from a `.bru` file, and doing so is outside this ticket's scope (see
+T022/T020/T024). Requests 20-23 (audit-bridge) run against `openemr_base_url`,
+which **is** reliably publicly reachable, so those four work unmodified from
+anywhere regardless of the agent domain's state.
+
+If a grader's `bru run --env railway` shows only 01/02/10-16 failing (502)
+and 20-23 passing, that is the expected, currently-disclosed state — not a
+bug in this collection. Once the Railway ingress is fixed (T024 or a manual
+`railway domain`/target-port fix), no `.bru` file needs to change: the
+public URL is already what's committed.
 
 ## CSRF
 
