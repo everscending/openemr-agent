@@ -9,6 +9,17 @@ only perform a lightweight reachability call (or raise on failure).
 Per ARCHITECTURE.md section 7 portability rule (b), the trace backend is
 reported under the generic ``trace_backend`` key — a configured
 dependency, never a named vendor product.
+
+T028: ``trace_backend``'s checker is sourced from
+``OTEL_EXPORTER_OTLP_ENDPOINT`` — the *same* env var
+:mod:`copilot.telemetry.bootstrap` reads to decide whether to wire a real
+OTLP exporter — so this endpoint can never disagree with what actually gets
+exported. The literal env-var name is duplicated here rather than imported
+from ``bootstrap`` on purpose: importing that module at module level would
+pull the OTel SDK/exporter into this module's transitive closure and trip
+the T014 import guard (only ``copilot.telemetry.bootstrap`` itself is
+exempt, and only for its own direct imports — see
+``copilot.telemetry.import_guard``'s docstring).
 """
 
 from __future__ import annotations
@@ -32,7 +43,11 @@ PROBE_HTTP_TIMEOUT_SECONDS = 4.0
 
 OPENEMR_FHIR_BASE_URL_ENV = "OPENEMR_FHIR_BASE_URL"
 LLM_PROVIDER_URL_ENV = "LLM_PROVIDER_URL"
-TRACE_BACKEND_URL_ENV = "TRACE_BACKEND_URL"
+#: T028: the trace backend's readiness probe reads the *real* exporter
+#: config var — see the module docstring's "T028" note for why this is a
+#: duplicated literal rather than an import of
+#: ``copilot.telemetry.bootstrap.OTEL_EXPORTER_OTLP_ENDPOINT_ENV``.
+OTEL_EXPORTER_OTLP_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_ENDPOINT"
 READINESS_DEADLINE_ENV = "READINESS_DEADLINE_SECONDS"
 
 
@@ -85,12 +100,18 @@ def _elapsed_ms(start: float) -> float:
 # -- default (production) checkers -------------------------------------------
 
 
-def default_checkers() -> dict[str, Checker]:
+def default_checkers(
+    *, trace_backend_transport: httpx.AsyncBaseTransport | None = None
+) -> dict[str, Checker]:
     """Build the production reachability checkers from environment config.
 
     Each checker performs one lightweight call. A missing configuration
     value surfaces as a probe failure (the service is not ready), never as
-    an endpoint crash.
+    an endpoint crash. ``trace_backend_transport`` is a test-only injection
+    seam (mirrors ``AuditBridgeClient``/``FhirClient``'s own ``transport=``
+    seams) so tests can assert the "configured and reachable" path at the
+    transport boundary instead of a real network call; omitted, a real
+    ``httpx`` connection is used, exactly like the other two dependencies.
     """
     return {
         "openemr_fhir": make_openemr_fhir_checker(),
@@ -98,7 +119,9 @@ def default_checkers() -> dict[str, Checker]:
             LLM_PROVIDER_URL_ENV, dependency="llm_provider"
         ),
         "trace_backend": make_http_reachability_checker(
-            TRACE_BACKEND_URL_ENV, dependency="trace_backend"
+            OTEL_EXPORTER_OTLP_ENDPOINT_ENV,
+            dependency="trace_backend",
+            transport=trace_backend_transport,
         ),
     }
 
@@ -141,8 +164,19 @@ def make_openemr_fhir_checker(fhir_client: FhirClient | None = None) -> Checker:
     return check
 
 
-def make_http_reachability_checker(env_var: str, *, dependency: str) -> Checker:
-    """Checker performing a GET against the URL configured in ``env_var``."""
+def make_http_reachability_checker(
+    env_var: str,
+    *,
+    dependency: str,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> Checker:
+    """Checker performing a GET against the URL configured in ``env_var``.
+
+    ``transport`` is an injection seam (default ``None`` uses a real network
+    connection) — tests substitute an ``httpx.MockTransport`` to assert the
+    "configured and reachable" path at the transport seam, the same pattern
+    ``AuditBridgeClient``/``FhirClient`` already use.
+    """
 
     async def check() -> None:
         url = os.environ.get(env_var)
@@ -150,7 +184,9 @@ def make_http_reachability_checker(env_var: str, *, dependency: str) -> Checker:
             raise RuntimeError(
                 f"{dependency} URL is not configured (set {env_var})"
             )
-        async with httpx.AsyncClient(timeout=PROBE_HTTP_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(
+            timeout=PROBE_HTTP_TIMEOUT_SECONDS, transport=transport
+        ) as client:
             response = await client.get(url)
             if response.status_code >= 500:
                 raise RuntimeError(

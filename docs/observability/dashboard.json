@@ -1,0 +1,149 @@
+{
+  "title": "Clinical Co-Pilot — Observability (T028)",
+  "uid": "copilot-observability",
+  "schemaVersion": 39,
+  "editable": true,
+  "tags": ["copilot", "otel", "tempo"],
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "DS_TEMPO",
+        "type": "datasource",
+        "query": "tempo",
+        "label": "Trace backend (Tempo, LangSmith-OTLP, or any OTLP-compatible store)"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "1. Total request count — chat.request root spans",
+      "description": "Backing signal: count of `chat.request` root spans (backend-derived). TraceQL below lists matching traces; row count over the selected time range is the total request count. A backend with native TraceQL metrics can instead graph `{ name = \"chat.request\" } | count_over_time()`.",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ name = \"chat.request\" }",
+          "tableType": "traces",
+          "limit": 200,
+          "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "2. Error rate — chat.request span status",
+      "description": "Backing signal: `chat.request` span status / `error.type` (backend-derived). TraceQL below isolates error-status root spans; error rate = this panel's row count / panel 1's row count over the same window. OTel's default `use_span` behavior sets ERROR status (no message, no recorded exception — T014's PHI rule) on any chat.request span an unhandled exception escapes.",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ name = \"chat.request\" && status = error }",
+          "tableType": "traces",
+          "limit": 200,
+          "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "3. p50 / p95 latency — chat.request span duration",
+      "description": "Backing signal: `chat.request` span start/end time (backend-derived). Table includes a Duration column per trace; apply Grafana's built-in percentile/Reduce transform, or (on a backend with TraceQL metrics) graph `{ name = \"chat.request\" } | quantile_over_time(duration, .5, .95)`.",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ name = \"chat.request\" } | select(duration)",
+          "tableType": "traces",
+          "limit": 200,
+          "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "4. Tool-call counts — tool.call spans + tool_failure_total",
+      "description": "Backing signal: count of `tool.call` spans, broken out by `tool.name`/`outcome` attribute, plus `/metrics`'s `tool_failure_total` counter (see panel 8's note on wiring the /metrics JSON endpoint as a data source).",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ name = \"tool.call\" } | select(span.tool.name, span.outcome)",
+          "tableType": "traces",
+          "limit": 200,
+          "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" }
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "5. Token cost — llm.call span llm.cost_usd",
+      "description": "Backing signal: `llm.call` span's `llm.cost_usd` attribute (exact Decimal string; absent, never zero, when usage/pricing is unknown — T014). Sum/average this column for total/average spend.",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ name = \"llm.call\" } | select(span.model, span.llm.input_tokens, span.llm.output_tokens, span.llm.cost_usd)",
+          "tableType": "traces",
+          "limit": 200,
+          "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" }
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "6. Verification pass/fail — verify.response claim counts",
+      "description": "Backing signal: `verify.response` span's `verify.claims_total` / `verify.claims_passed` attributes (T008/T009). Pass rate = sum(claims_passed) / sum(claims_total) over the window.",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ name = \"verify.response\" } | select(span.verify.claims_total, span.verify.claims_passed, span.verify.claims_stripped)",
+          "tableType": "traces",
+          "limit": 200,
+          "datasource": { "type": "tempo", "uid": "${DS_TEMPO}" }
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "7. In-flight request depth (derived)",
+      "type": "text",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "options": {
+        "mode": "markdown",
+        "content": "**Backing signal**: `chat.request` root-span start/end concurrency — *derived*, not a literal attribute (T028 pre-spec). No backend queried during this ticket computes true span-overlap concurrency without an extra recording rule; on Tempo, approximate via the metrics-generator's `traces_service_graph_request_total` / span-metrics duration histogram cross-referenced with request rate (panel 1) and average latency (panel 3): `in_flight ≈ rate(requests) × avg(duration)` (Little's Law). If the chosen backend cannot compute real overlap, an in-process gauge would be a T014 amendment — out of this ticket's scope; flagged, not built here."
+      }
+    },
+    {
+      "id": 8,
+      "title": "8. Retry counts — llm_corrective_retry_total (/metrics)",
+      "type": "text",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "options": {
+        "mode": "markdown",
+        "content": "**Backing signal**: `/metrics`'s `llm_corrective_retry_total` counter (T039), alongside `tool_failure_total` (panel 4) and `audit_delivery_success_total` / `audit_delivery_failure_total`. `/metrics` returns plain JSON, not Prometheus exposition format — point a scrape adapter or Grafana's JSON API datasource plugin at it (`GF_INSTALL_PLUGINS=marcusolsson-json-datasource`) to graph it over time; documented in `docs/observability/README.md` rather than wired live in this file, since it needs one extra (undeployed-by-default) Grafana plugin."
+      }
+    }
+  ]
+}

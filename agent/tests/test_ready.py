@@ -212,7 +212,7 @@ def test_ready_exists_with_default_checkers(monkeypatch) -> None:
     for var in (
         "OPENEMR_FHIR_BASE_URL",
         "LLM_PROVIDER_URL",
-        "TRACE_BACKEND_URL",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
     ):
         monkeypatch.delenv(var, raising=False)
     client = TestClient(create_app())
